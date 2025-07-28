@@ -75,6 +75,8 @@ Our development will follow an iterative, checkpoint-based model. Each checkpoin
 
 ### **Checkpoint 3: The "Thinking" Orchestrator Agent**
 
+**IMPORTANT** LLM used in this project is accessed via ollama, which is hosted on ip 192.168.1.15, the model name is "gemma3:27b". 
+
 **Demo Goal:** Introduce the first LLM. The `Orchestrator Agent` now dynamically generates the **Thesis and Antithesis missions** and their respective `ResearchPlans` based on the user's actual query. The system is no longer canned; it is reasoning about opposition.
 
 *   **Ticket ID:** `CP3-T301`

@@ -1,11 +1,16 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import time
 import uuid
-from typing import Dict, Any
+from typing import Dict, Any, List
+from sqlalchemy.orm import Session
+import threading
+
+from models import get_db, create_tables, Job, EvidenceDossier, ResearchPlan, ResearchPlanStep, EvidenceItem, SessionLocal
+from services import CannedResearchService
 
 app = FastAPI(title="Agentic Retrieval System v2.0", version="2.0.0")
 
@@ -21,9 +26,8 @@ app.add_middleware(
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Mock data storage (in production, this would be a database)
-mock_jobs: Dict[str, Dict[str, Any]] = {}
-mock_dossiers: Dict[str, Dict[str, Any]] = {}
+# Create database tables on startup
+create_tables()
 
 class ResearchQuery(BaseModel):
     query: str
@@ -36,52 +40,50 @@ class JobStatus(BaseModel):
     thesis_dossier_id: str = None
     antithesis_dossier_id: str = None
 
-class EvidenceItem(BaseModel):
+class EvidenceItemResponse(BaseModel):
     id: str
     title: str
     content: str
     source: str
     confidence: float
 
-class ResearchPlan(BaseModel):
-    plan_id: str
-    steps: list
+class ResearchPlanStepResponse(BaseModel):
+    step_id: str
+    step_number: int
+    description: str
+    status: str
+    tool_used: str = None
+    tool_selection_justification: str = None
+    tool_query_rationale: str = None
 
-class Dossier(BaseModel):
+class ResearchPlanResponse(BaseModel):
+    plan_id: str
+    steps: List[ResearchPlanStepResponse]
+
+class DossierResponse(BaseModel):
     dossier_id: str
     mission: str
     status: str
-    research_plan: ResearchPlan
-    evidence_items: list[EvidenceItem]
+    research_plan: ResearchPlanResponse
+    evidence_items: List[EvidenceItemResponse]
     summary_of_findings: str
 
 @app.post("/v2/research", response_model=JobResponse)
-async def create_research_job(query: ResearchQuery):
-    """CP1-T102: Mock endpoint that accepts a query and returns a job ID"""
-    job_id = f"mock-job-v2-{uuid.uuid4().hex[:8]}"
+async def create_research_job(query: ResearchQuery, db: Session = Depends(get_db)):
+    """CP2-T202: Create a real job and two associated dossiers in the database"""
     
-    # Create mock job record
-    mock_jobs[job_id] = {
-        "job_id": job_id,
-        "query": query.query,
-        "status": "RESEARCHING",
-        "created_at": time.time()
-    }
+    # Create job and dossiers
+    job = CannedResearchService.create_job_with_dossiers(db, query.query)
     
-    # Simulate processing delay
-    time.sleep(2)
+    # Start processing in background thread
+    def process_job_async():
+        with SessionLocal() as async_db:
+            CannedResearchService.process_job(async_db, job.id)
     
-    # Update status to indicate completion
-    mock_jobs[job_id]["status"] = "AWAITING_VERIFICATION"
+    thread = threading.Thread(target=process_job_async)
+    thread.start()
     
-    # Create mock dossier IDs
-    thesis_dossier_id = f"mock-thesis-{uuid.uuid4().hex[:8]}"
-    antithesis_dossier_id = f"mock-antithesis-{uuid.uuid4().hex[:8]}"
-    
-    mock_jobs[job_id]["thesis_dossier_id"] = thesis_dossier_id
-    mock_jobs[job_id]["antithesis_dossier_id"] = antithesis_dossier_id
-    
-    return JobResponse(job_id=job_id)
+    return JobResponse(job_id=job.id)
 
 @app.get("/")
 async def read_root():
@@ -94,118 +96,78 @@ async def read_research_results(job_id: str):
     return FileResponse("static/research.html")
 
 @app.get("/v2/research/{job_id}/status", response_model=JobStatus)
-async def get_job_status(job_id: str):
-    """Get the status of a research job"""
-    if job_id not in mock_jobs:
+async def get_job_status(job_id: str, db: Session = Depends(get_db)):
+    """Get the status of a research job from database"""
+    
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    job = mock_jobs[job_id]
+    # Get dossier IDs
+    dossiers = db.query(EvidenceDossier).filter(EvidenceDossier.job_id == job_id).all()
+    thesis_dossier_id = None
+    antithesis_dossier_id = None
     
-    # Simulate initial researching state
-    if job["status"] == "RESEARCHING":
-        return JobStatus(status="RESEARCHING")
+    for dossier in dossiers:
+        if dossier.dossier_type.value == "THESIS":
+            thesis_dossier_id = dossier.id
+        else:
+            antithesis_dossier_id = dossier.id
     
-    # Return completed state with dossier IDs
     return JobStatus(
-        status=job["status"],
-        thesis_dossier_id=job.get("thesis_dossier_id"),
-        antithesis_dossier_id=job.get("antithesis_dossier_id")
+        status=job.status.value,
+        thesis_dossier_id=thesis_dossier_id,
+        antithesis_dossier_id=antithesis_dossier_id
     )
 
-@app.get("/v2/dossiers/{dossier_id}", response_model=Dossier)
-async def get_dossier(dossier_id: str):
-    """CP1-T103: Get a mock dossier with hardcoded data"""
+@app.get("/v2/dossiers/{dossier_id}", response_model=DossierResponse)
+async def get_dossier(dossier_id: str, db: Session = Depends(get_db)):
+    """CP2-T203: Get a real dossier with data from the database"""
     
-    # Create mock dossier data based on the ID
-    if dossier_id.startswith("mock-thesis"):
-        return Dossier(
-            dossier_id=dossier_id,
-            mission="Build the strongest possible case FOR the user's query.",
-            status="AWAITING_VERIFICATION",
-            research_plan=ResearchPlan(
-                plan_id=f"plan-{dossier_id}",
-                steps=[
-                    {
-                        "step_id": "step-001",
-                        "description": "Analyze positive market indicators",
-                        "status": "COMPLETED",
-                        "tool_used": "market-data-api",
-                        "tool_selection_justification": "Market data is essential for understanding positive trends",
-                        "tool_query_rationale": "Focusing on growth metrics and positive sentiment indicators"
-                    },
-                    {
-                        "step_id": "step-002", 
-                        "description": "Review favorable expert opinions",
-                        "status": "COMPLETED",
-                        "tool_used": "expert-analysis-db",
-                        "tool_selection_justification": "Expert opinions provide credibility to the thesis",
-                        "tool_query_rationale": "Searching for bullish analyst reports and positive forecasts"
-                    }
-                ]
-            ),
-            evidence_items=[
-                EvidenceItem(
-                    id="ev-001",
-                    title="Strong Market Growth Indicators",
-                    content="Recent market analysis shows consistent growth patterns with 15% year-over-year increase in key metrics.",
-                    source="Market Analysis Report 2024",
-                    confidence=0.85
-                ),
-                EvidenceItem(
-                    id="ev-002", 
-                    title="Expert Bullish Sentiment",
-                    content="Leading industry experts maintain positive outlook with 80% of surveyed analysts recommending strong buy positions.",
-                    source="Expert Consensus Survey",
-                    confidence=0.90
-                )
-            ],
-            summary_of_findings="The evidence strongly supports a positive outlook with robust market fundamentals and expert consensus backing the thesis."
-        )
-    else:
-        # Antithesis dossier
-        return Dossier(
-            dossier_id=dossier_id,
-            mission="Build the strongest possible case AGAINST the user's query.",
-            status="AWAITING_VERIFICATION", 
-            research_plan=ResearchPlan(
-                plan_id=f"plan-{dossier_id}",
-                steps=[
-                    {
-                        "step_id": "step-001",
-                        "description": "Identify market risks and challenges",
-                        "status": "COMPLETED",
-                        "tool_used": "risk-assessment-api",
-                        "tool_selection_justification": "Risk analysis is crucial for understanding potential downsides",
-                        "tool_query_rationale": "Focusing on volatility indicators and negative market signals"
-                    },
-                    {
-                        "step_id": "step-002",
-                        "description": "Review bearish expert opinions", 
-                        "status": "COMPLETED",
-                        "tool_used": "expert-analysis-db",
-                        "tool_selection_justification": "Contrary expert opinions provide balance to the analysis",
-                        "tool_query_rationale": "Searching for bearish analyst reports and risk warnings"
-                    }
-                ]
-            ),
-            evidence_items=[
-                EvidenceItem(
-                    id="ev-003",
-                    title="Market Volatility Concerns",
-                    content="Recent market volatility has increased by 25% with several concerning indicators pointing to potential instability.",
-                    source="Volatility Analysis Report",
-                    confidence=0.80
-                ),
-                EvidenceItem(
-                    id="ev-004",
-                    title="Expert Risk Warnings", 
-                    content="20% of industry experts have issued cautionary statements about current market conditions and potential downside risks.",
-                    source="Risk Assessment Survey",
-                    confidence=0.75
-                )
-            ],
-            summary_of_findings="Significant risks and challenges exist that warrant careful consideration, with multiple experts highlighting potential downside scenarios."
-        )
+    dossier = db.query(EvidenceDossier).filter(EvidenceDossier.id == dossier_id).first()
+    if not dossier:
+        raise HTTPException(status_code=404, detail="Dossier not found")
+    
+    # Get research plan
+    research_plan = db.query(ResearchPlan).filter(ResearchPlan.dossier_id == dossier_id).first()
+    if not research_plan:
+        raise HTTPException(status_code=404, detail="Research plan not found")
+    
+    # Get plan steps
+    steps = db.query(ResearchPlanStep).filter(ResearchPlanStep.research_plan_id == research_plan.id).order_by(ResearchPlanStep.step_number).all()
+    
+    # Get evidence items
+    evidence_items = db.query(EvidenceItem).filter(EvidenceItem.dossier_id == dossier_id).all()
+    
+    return DossierResponse(
+        dossier_id=dossier.id,
+        mission=dossier.mission,
+        status=dossier.status.value,
+        research_plan=ResearchPlanResponse(
+            plan_id=research_plan.id,
+            steps=[
+                ResearchPlanStepResponse(
+                    step_id=step.id,
+                    step_number=step.step_number,
+                    description=step.description,
+                    status=step.status.value,
+                    tool_used=step.tool_used,
+                    tool_selection_justification=step.tool_selection_justification,
+                    tool_query_rationale=step.tool_query_rationale
+                ) for step in steps
+            ]
+        ),
+        evidence_items=[
+            EvidenceItemResponse(
+                id=item.id,
+                title=item.title,
+                content=item.content,
+                source=item.source,
+                confidence=item.confidence
+            ) for item in evidence_items
+        ],
+        summary_of_findings=dossier.summary_of_findings or ""
+    )
 
 if __name__ == "__main__":
     import uvicorn
