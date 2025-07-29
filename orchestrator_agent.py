@@ -7,6 +7,7 @@ from models import (
     JobStatus, DossierStatus, DossierType, StepStatus, SessionLocal
 )
 from celery_app import celery_app
+from research_agent import research_agent_task
 
 class LLMClient:
     """Client for interacting with the LLM via Ollama"""
@@ -222,7 +223,7 @@ Ensure both missions are equally rigorous and the plans are detailed enough for 
                 step = ResearchPlanStep(
                     id=f"step-{uuid.uuid4().hex[:8]}",
                     research_plan_id=plan_id,
-                    status=StepStatus.COMPLETED,  # Mark as completed for this checkpoint
+                    status=StepStatus.PENDING,  # Mark as pending for Research Agent to execute
                     **step_data
                 )
                 db.add(step)
@@ -261,7 +262,27 @@ def orchestrator_task(self, job_id: str):
             # Create research plans
             orchestrator.create_research_plans(db, job_id, missions_data)
             
-            # Update job status to awaiting verification
+            # CP4-T403: Enable parallel research job execution
+            # Get the dossiers and enqueue research agent tasks
+            dossiers = db.query(EvidenceDossier).filter(EvidenceDossier.job_id == job_id).all()
+            
+            # Enqueue research agent tasks for both dossiers in parallel
+            research_tasks = []
+            for dossier in dossiers:
+                task = research_agent_task.delay(dossier.id)
+                research_tasks.append(task)
+            
+            # Update job status to researching (since research agents are now running)
+            job.status = JobStatus.RESEARCHING
+            db.commit()
+            
+            self.update_state(state='PROGRESS', meta={'status': 'Research agents enqueued for parallel execution'})
+            
+            # Wait for both research tasks to complete
+            for task in research_tasks:
+                task.get()  # This will wait for the task to complete
+            
+            # Update job status to awaiting verification after both research agents complete
             job.status = JobStatus.AWAITING_VERIFICATION
             db.commit()
             
