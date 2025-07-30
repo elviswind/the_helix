@@ -42,6 +42,38 @@ mock_data = {
             "source": "Risk Assessment Survey", 
             "confidence": 0.75,
             "tags": ["bearish", "risk-warnings", "downgrades"]
+        },
+        {
+            "id": "ea-003",
+            "title": "Relationship Psychology Study",
+            "content": "Research shows that physical attraction plays a significant role in initial relationship formation, with 78% of couples reporting attraction as a key factor in their first meeting.",
+            "source": "Psychology Today Research",
+            "confidence": 0.82,
+            "tags": ["relationship", "psychology", "attraction", "study"]
+        },
+        {
+            "id": "ea-004",
+            "title": "Long-term Relationship Success Factors",
+            "content": "Studies indicate that while physical attraction is important initially, long-term relationship success depends more on emotional compatibility, shared values, and communication skills.",
+            "source": "Marriage and Family Studies Journal",
+            "confidence": 0.88,
+            "tags": ["relationship", "long-term", "success", "compatibility"]
+        },
+        {
+            "id": "ea-005",
+            "title": "Evolutionary Psychology of Mate Selection",
+            "content": "Evolutionary psychology research suggests that physical attractiveness serves as a proxy for health and fertility, influencing mate selection across cultures and time periods.",
+            "source": "Evolutionary Psychology Review",
+            "confidence": 0.85,
+            "tags": ["evolutionary", "psychology", "mate-selection", "attraction"]
+        },
+        {
+            "id": "ea-006",
+            "title": "Marital Satisfaction Research",
+            "content": "Longitudinal studies show that couples who prioritize emotional intimacy and shared values over physical appearance report higher marital satisfaction after 10+ years.",
+            "source": "Journal of Marriage and Family",
+            "confidence": 0.87,
+            "tags": ["marriage", "satisfaction", "emotional-intimacy", "values"]
         }
     ],
     "competitive-analysis": [
@@ -78,6 +110,32 @@ mock_data = {
             "source": "Financial Risk Analysis",
             "confidence": 0.72,
             "tags": ["financial-risk", "debt", "liquidity"]
+        }
+    ],
+    "relationship-data": [
+        {
+            "id": "rd-001",
+            "title": "Physical Attraction in Modern Dating",
+            "content": "Dating app data shows that physical attraction remains the primary factor in initial matches, with 85% of users citing appearance as their top criterion for swiping right.",
+            "source": "Dating App Analytics Report",
+            "confidence": 0.79,
+            "tags": ["dating", "attraction", "modern-relationships", "apps"]
+        },
+        {
+            "id": "rd-002",
+            "title": "Divorce Statistics Analysis",
+            "content": "Recent divorce statistics indicate that 23% of divorces cite 'lack of compatibility' as a primary reason, with many couples reporting that initial attraction faded over time.",
+            "source": "National Marriage Statistics",
+            "confidence": 0.83,
+            "tags": ["divorce", "compatibility", "statistics", "marriage"]
+        },
+        {
+            "id": "rd-003",
+            "title": "Couples Therapy Success Rates",
+            "content": "Couples who seek therapy for relationship issues report that focusing on emotional connection and communication skills leads to higher satisfaction than focusing on physical aspects.",
+            "source": "Couples Therapy Research",
+            "confidence": 0.81,
+            "tags": ["therapy", "couples", "emotional-connection", "communication"]
         }
     ]
 }
@@ -177,6 +235,19 @@ async def get_manifest():
                         }
                     }
                 }
+            },
+            {
+                "name": "relationship-data-api",
+                "description": "Relationship psychology and marriage data",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query for relationship data"
+                        }
+                    }
+                }
             }
         ]
     )
@@ -198,6 +269,8 @@ async def search_data(request: MCPSearchRequest):
         data_source = None
     elif request.tool_name == "financial-data-api":
         data_source = "financial-data"
+    elif request.tool_name == "relationship-data-api":
+        data_source = "relationship-data"
     else:
         # If no specific tool, search across all sources
         data_source = None

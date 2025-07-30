@@ -4,9 +4,10 @@ import requests
 from sqlalchemy.orm import Session
 from models import (
     EvidenceDossier, ResearchPlan, ResearchPlanStep, EvidenceItem,
-    DossierStatus, StepStatus, SessionLocal
+    DossierStatus, StepStatus, SessionLocal, LLMRequest, LLMRequestStatus, LLMRequestType, Job, JobStatus
 )
 from celery_app import celery_app
+from datetime import datetime
 
 class MCPClient:
     """Client for interacting with the MCP server"""
@@ -41,8 +42,84 @@ class MCPClient:
             print(f"MCP search error: {e}")
             return {"results": [], "total_count": 0}
 
+class TrackingLLMClient:
+    """Client for interacting with the LLM via Ollama with request tracking"""
+    
+    def __init__(self, base_url="http://192.168.1.15:11434", model="gemma3:27b"):
+        self.base_url = base_url
+        self.model = model
+    
+    def generate(self, prompt: str, job_id: str, request_type: LLMRequestType, 
+                 dossier_id: str = None, max_tokens: int = 2000) -> str:
+        """Generate text using the LLM with request tracking"""
+        
+        # Create LLM request record
+        db = SessionLocal()
+        try:
+            llm_request = LLMRequest(
+                id=f"llm-{uuid.uuid4().hex[:8]}",
+                job_id=job_id,
+                dossier_id=dossier_id,
+                request_type=request_type,
+                status=LLMRequestStatus.PENDING,
+                prompt=prompt
+            )
+            db.add(llm_request)
+            db.commit()
+            
+            # Update status to in progress
+            llm_request.status = LLMRequestStatus.IN_PROGRESS
+            llm_request.started_at = datetime.utcnow()
+            db.commit()
+            
+            try:
+                response = requests.post(
+                    f"{self.base_url}/api/generate",
+                    json={
+                        "model": self.model,
+                        "prompt": prompt,
+                        "stream": False,
+                        "options": {
+                            "temperature": 0.7,
+                        }
+                    },
+                    timeout=120  # 2 minute timeout
+                )
+                response.raise_for_status()
+                result = response.json()["response"]
+                
+                # Update request as completed
+                llm_request.status = LLMRequestStatus.COMPLETED
+                llm_request.response = result
+                llm_request.completed_at = datetime.utcnow()
+                db.commit()
+                
+                return result
+                
+            except Exception as e:
+                # Update request as failed
+                llm_request.status = LLMRequestStatus.FAILED
+                llm_request.error_message = str(e)
+                llm_request.completed_at = datetime.utcnow()
+                db.commit()
+                
+                print(f"LLM API error: {e}")
+                return self._mock_response(prompt)
+                
+        finally:
+            db.close()
+    
+    def _mock_response(self, prompt: str) -> str:
+        """Mock response for development when LLM is not available"""
+        if "tool selection" in prompt.lower():
+            return "market-data-api"
+        elif "query formulation" in prompt.lower():
+            return "growth trends and market indicators"
+        else:
+            return "Mock response for development"
+
 class LLMClient:
-    """Client for interacting with the LLM via Ollama"""
+    """Legacy client for backward compatibility"""
     
     def __init__(self, base_url="http://192.168.1.15:11434", model="gemma3:27b"):
         self.base_url = base_url
@@ -81,10 +158,10 @@ class ResearchAgent:
     """Agent responsible for executing research plans and gathering evidence"""
     
     def __init__(self):
-        self.llm_client = LLMClient()
+        self.llm_client = TrackingLLMClient()
         self.mcp_client = MCPClient()
     
-    def select_tool(self, step_description: str, available_tools: list) -> str:
+    def select_tool(self, step_description: str, available_tools: list, job_id: str, dossier_id: str) -> str:
         """Use LLM to select the best tool for a research step"""
         
         tools_info = "\n".join([f"- {tool['name']}: {tool['description']}" for tool in available_tools])
@@ -101,7 +178,7 @@ Based on the research step description, which tool would be most appropriate?
 Respond with only the tool name (e.g., "market-data-api").
 """
         
-        response = self.llm_client.generate(prompt)
+        response = self.llm_client.generate(prompt, job_id, LLMRequestType.TOOL_SELECTION, dossier_id)
         # Clean up the response to get just the tool name
         tool_name = response.strip().split('\n')[0].strip()
         
@@ -113,7 +190,7 @@ Respond with only the tool name (e.g., "market-data-api").
         
         return tool_name
     
-    def formulate_query(self, step_description: str, tool_name: str) -> str:
+    def formulate_query(self, step_description: str, tool_name: str, job_id: str, dossier_id: str) -> str:
         """Use LLM to formulate an appropriate query for the selected tool"""
         
         prompt = f"""
@@ -122,17 +199,23 @@ You are a research agent that needs to formulate a search query for a specific t
 Research step: {step_description}
 Selected tool: {tool_name}
 
-Based on the research step and the tool, formulate a specific search query that will help gather relevant evidence.
-The query should be focused and specific to the research objective.
+Based on the research step and the tool, formulate a very simple search query using only ONE common keyword.
+The query should be general and use a basic term that is likely to match available data.
 
-Respond with only the search query (e.g., "growth trends market indicators").
+For relationship topics, use simple terms like: "attraction", "marriage", "relationship", "dating"
+For market topics, use simple terms like: "market", "growth", "risk", "financial"
+
+Respond with only ONE word (e.g., "attraction").
 """
         
-        response = self.llm_client.generate(prompt)
+        response = self.llm_client.generate(prompt, job_id, LLMRequestType.QUERY_FORMULATION, dossier_id)
         return response.strip()
     
     def execute_step(self, db: Session, step: ResearchPlanStep, dossier: EvidenceDossier):
         """Execute a single research plan step"""
+        
+        # Get the job ID for LLM request tracking
+        job_id = dossier.job_id
         
         # Get available tools from MCP server
         manifest = self.mcp_client.get_manifest()
@@ -148,11 +231,11 @@ Respond with only the search query (e.g., "growth trends market indicators").
             available_tools = manifest.get("tools", [])
         
         # Step 1: Tool Selection
-        tool_name = self.select_tool(step.description, available_tools)
+        tool_name = self.select_tool(step.description, available_tools, job_id, dossier.id)
         tool_selection_justification = f"Selected {tool_name} because it is most appropriate for: {step.description}"
         
         # Step 2: Query Formulation
-        query = self.formulate_query(step.description, tool_name)
+        query = self.formulate_query(step.description, tool_name, job_id, dossier.id)
         tool_query_rationale = f"Formulated query '{query}' to gather evidence for: {step.description}"
         
         # Step 3: Execute the search
@@ -240,6 +323,23 @@ def research_agent_task(self, dossier_id: str):
             self.update_state(state='PROGRESS', meta={'status': 'Executing research plan'})
             
             agent.execute_research_plan(db, dossier_id)
+            
+            # Check if all dossiers for this job are complete
+            dossier = db.query(EvidenceDossier).filter(EvidenceDossier.id == dossier_id).first()
+            if dossier:
+                job_id = dossier.job_id
+                all_dossiers = db.query(EvidenceDossier).filter(EvidenceDossier.job_id == job_id).all()
+                
+                # Check if all dossiers are in AWAITING_VERIFICATION status
+                all_complete = all(d.status == DossierStatus.AWAITING_VERIFICATION for d in all_dossiers)
+                
+                if all_complete:
+                    # Update job status to AWAITING_VERIFICATION
+                    job = db.query(Job).filter(Job.id == job_id).first()
+                    if job:
+                        job.status = JobStatus.AWAITING_VERIFICATION
+                        db.commit()
+                        print(f"Job {job_id} updated to AWAITING_VERIFICATION - all dossiers complete")
             
             self.update_state(state='SUCCESS', meta={'status': 'Research completed'})
             

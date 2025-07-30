@@ -4,13 +4,142 @@ import requests
 from sqlalchemy.orm import Session
 from models import (
     Job, EvidenceDossier, ResearchPlan, ResearchPlanStep,
-    JobStatus, DossierStatus, DossierType, StepStatus, SessionLocal
+    JobStatus, DossierStatus, DossierType, StepStatus, SessionLocal,
+    LLMRequest, LLMRequestStatus, LLMRequestType
 )
 from celery_app import celery_app
 from research_agent import research_agent_task
+from datetime import datetime
+import time
+
+class TrackingLLMClient:
+    """Client for interacting with the LLM via Ollama with request tracking"""
+    
+    def __init__(self, base_url="http://192.168.1.15:11434", model="gemma3:27b"):
+        self.base_url = base_url
+        self.model = model
+    
+    def generate(self, prompt: str, job_id: str, request_type: LLMRequestType, 
+                 dossier_id: str = None, max_tokens: int = 2000) -> str:
+        """Generate text using the LLM with request tracking"""
+        
+        # Create LLM request record
+        db = SessionLocal()
+        try:
+            llm_request = LLMRequest(
+                id=f"llm-{uuid.uuid4().hex[:8]}",
+                job_id=job_id,
+                dossier_id=dossier_id,
+                request_type=request_type,
+                status=LLMRequestStatus.PENDING,
+                prompt=prompt
+            )
+            db.add(llm_request)
+            db.commit()
+            
+            # Update status to in progress
+            llm_request.status = LLMRequestStatus.IN_PROGRESS
+            llm_request.started_at = datetime.utcnow()
+            db.commit()
+            
+            try:
+                response = requests.post(
+                    f"{self.base_url}/api/generate",
+                    json={
+                        "model": self.model,
+                        "prompt": prompt,
+                        "stream": False,
+                        "options": {
+                            "temperature": 0.7,
+                        }
+                    },
+                    timeout=120  # 2 minute timeout
+                )
+                response.raise_for_status()
+                result = response.json()["response"]
+                
+                # Update request as completed
+                llm_request.status = LLMRequestStatus.COMPLETED
+                llm_request.response = result
+                llm_request.completed_at = datetime.utcnow()
+                db.commit()
+                
+                return result
+                
+            except Exception as e:
+                # Update request as failed
+                llm_request.status = LLMRequestStatus.FAILED
+                llm_request.error_message = str(e)
+                llm_request.completed_at = datetime.utcnow()
+                db.commit()
+                
+                print(f"LLM API error: {e}")
+                # Fallback to mock response for development
+                return self._mock_response(prompt)
+                
+        finally:
+            db.close()
+    
+    def _mock_response(self, prompt: str) -> str:
+        """Mock response for development when LLM is not available"""
+        if "thesis" in prompt.lower() and "antithesis" in prompt.lower():
+            return """
+{
+  "thesis_mission": "Build the strongest possible case FOR the investment opportunity by analyzing positive market indicators, growth potential, competitive advantages, and favorable expert opinions.",
+  "antithesis_mission": "Build the strongest possible case AGAINST the investment opportunity by examining market risks, competitive threats, financial concerns, and bearish expert opinions.",
+  "thesis_plan": [
+    {
+      "step_number": 1,
+      "description": "Analyze positive market indicators and growth trends",
+      "tool_used": "market-data-api",
+      "tool_selection_justification": "Market data is essential for understanding positive trends and growth potential",
+      "tool_query_rationale": "Focusing on growth metrics, positive sentiment indicators, and upward trends"
+    },
+    {
+      "step_number": 2,
+      "description": "Review favorable expert opinions and analyst reports",
+      "tool_used": "expert-analysis-db",
+      "tool_selection_justification": "Expert opinions provide credibility and validation to the thesis",
+      "tool_query_rationale": "Searching for bullish analyst reports, positive forecasts, and expert endorsements"
+    },
+    {
+      "step_number": 3,
+      "description": "Examine competitive advantages and market position",
+      "tool_used": "competitive-analysis-api",
+      "tool_selection_justification": "Understanding competitive position is crucial for long-term success",
+      "tool_query_rationale": "Analyzing market share, competitive moats, and strategic advantages"
+    }
+  ],
+  "antithesis_plan": [
+    {
+      "step_number": 1,
+      "description": "Identify market risks and potential challenges",
+      "tool_used": "risk-assessment-api",
+      "tool_selection_justification": "Risk analysis is crucial for understanding potential downsides and vulnerabilities",
+      "tool_query_rationale": "Focusing on volatility indicators, negative market signals, and potential disruption factors"
+    },
+    {
+      "step_number": 2,
+      "description": "Review bearish expert opinions and cautionary reports",
+      "tool_used": "expert-analysis-db",
+      "tool_selection_justification": "Contrary expert opinions provide balance and highlight potential blind spots",
+      "tool_query_rationale": "Searching for bearish analyst reports, risk warnings, and skeptical viewpoints"
+    },
+    {
+      "step_number": 3,
+      "description": "Analyze competitive threats and market disruption risks",
+      "tool_used": "competitive-analysis-api",
+      "tool_selection_justification": "Understanding competitive threats is essential for risk assessment",
+      "tool_query_rationale": "Analyzing emerging competitors, disruptive technologies, and market share erosion risks"
+    }
+  ]
+}
+"""
+        else:
+            return "Mock response for development"
 
 class LLMClient:
-    """Client for interacting with the LLM via Ollama"""
+    """Legacy client for backward compatibility"""
     
     def __init__(self, base_url="http://192.168.1.15:11434", model="gemma3:27b"):
         self.base_url = base_url
@@ -95,15 +224,16 @@ class LLMClient:
   ]
 }
 """
-        return "Mock response for development"
+        else:
+            return "Mock response for development"
 
 class OrchestratorAgent:
     """Agent responsible for creating dialectical research missions and plans"""
     
     def __init__(self):
-        self.llm_client = LLMClient()
+        self.llm_client = TrackingLLMClient()
     
-    def create_dialectical_missions(self, user_query: str) -> dict:
+    def create_dialectical_missions(self, user_query: str, job_id: str) -> dict:
         """Generate thesis and antithesis missions using LLM"""
         
         prompt = f"""
@@ -143,7 +273,7 @@ Please respond with a JSON object in this exact format:
 Ensure both missions are equally rigorous and the plans are detailed enough for execution.
 """
         
-        response = self.llm_client.generate(prompt)
+        response = self.llm_client.generate(prompt, job_id, LLMRequestType.ORCHESTRATOR_MISSION)
         
         try:
             # Try to parse the response as JSON
@@ -255,7 +385,7 @@ def orchestrator_task(self, job_id: str):
             
             # Create orchestrator agent and generate missions
             orchestrator = OrchestratorAgent()
-            missions_data = orchestrator.create_dialectical_missions(job.query)
+            missions_data = orchestrator.create_dialectical_missions(job.query, job_id)
             
             self.update_state(state='PROGRESS', meta={'status': 'Creating research plans'})
             
@@ -267,31 +397,19 @@ def orchestrator_task(self, job_id: str):
             dossiers = db.query(EvidenceDossier).filter(EvidenceDossier.job_id == job_id).all()
             
             # Enqueue research agent tasks for both dossiers in parallel
-            research_tasks = []
             for dossier in dossiers:
-                task = research_agent_task.delay(dossier.id)
-                research_tasks.append(task)
+                research_agent_task.delay(dossier.id)
             
             # Update job status to researching (since research agents are now running)
             job.status = JobStatus.RESEARCHING
             db.commit()
             
-            self.update_state(state='PROGRESS', meta={'status': 'Research agents enqueued for parallel execution'})
-            
-            # Wait for both research tasks to complete
-            for task in research_tasks:
-                task.get()  # This will wait for the task to complete
-            
-            # Update job status to awaiting verification after both research agents complete
-            job.status = JobStatus.AWAITING_VERIFICATION
-            db.commit()
-            
-            self.update_state(state='SUCCESS', meta={'status': 'Orchestration completed'})
+            self.update_state(state='SUCCESS', meta={'status': 'Research agents enqueued for parallel execution'})
             
             return {
                 'status': 'success',
                 'job_id': job_id,
-                'message': 'Dialectical missions and research plans created successfully'
+                'message': 'Dialectical missions and research plans created successfully. Research agents enqueued.'
             }
             
         finally:

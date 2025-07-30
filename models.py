@@ -29,6 +29,18 @@ class StepStatus(enum.Enum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
 
+class LLMRequestStatus(enum.Enum):
+    PENDING = "PENDING"
+    IN_PROGRESS = "IN_PROGRESS"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+class LLMRequestType(enum.Enum):
+    ORCHESTRATOR_MISSION = "ORCHESTRATOR_MISSION"
+    TOOL_SELECTION = "TOOL_SELECTION"
+    QUERY_FORMULATION = "QUERY_FORMULATION"
+    SYNTHESIS = "SYNTHESIS"
+
 class Job(Base):
     __tablename__ = "jobs"
     
@@ -101,6 +113,25 @@ class EvidenceItem(Base):
     
     # Relationships
     dossier = relationship("EvidenceDossier", back_populates="evidence_items")
+
+class LLMRequest(Base):
+    __tablename__ = "llm_requests"
+    
+    id = Column(String, primary_key=True)
+    job_id = Column(String, ForeignKey("jobs.id"), nullable=False)
+    dossier_id = Column(String, ForeignKey("evidence_dossiers.id"), nullable=True)  # Optional, for dossier-specific requests
+    request_type = Column(Enum(LLMRequestType), nullable=False)
+    status = Column(Enum(LLMRequestStatus), default=LLMRequestStatus.PENDING)
+    prompt = Column(Text, nullable=False)
+    response = Column(Text, nullable=True)
+    error_message = Column(Text, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    job = relationship("Job")
+    dossier = relationship("EvidenceDossier")
 
 # Database setup
 DATABASE_URL = "sqlite:///./ar_system.db"

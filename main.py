@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 import threading
 from celery.result import AsyncResult
 
-from models import get_db, create_tables, Job, EvidenceDossier, ResearchPlan, ResearchPlanStep, EvidenceItem, SessionLocal
+from models import get_db, create_tables, Job, EvidenceDossier, ResearchPlan, ResearchPlanStep, EvidenceItem, SessionLocal, LLMRequest, LLMRequestStatus, LLMRequestType
 from services import CannedResearchService
 from orchestrator_agent import orchestrator_task
 
@@ -71,6 +71,24 @@ class DossierResponse(BaseModel):
     research_plan: ResearchPlanResponse
     evidence_items: List[EvidenceItemResponse]
     summary_of_findings: str
+
+class LLMRequestResponse(BaseModel):
+    id: str
+    request_type: str
+    status: str
+    prompt: str
+    response: str | None = None
+    error_message: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    created_at: str
+    dossier_id: str | None = None
+
+class LLMRequestsResponse(BaseModel):
+    pending_requests: List[LLMRequestResponse]
+    in_progress_requests: List[LLMRequestResponse]
+    completed_requests: List[LLMRequestResponse]
+    failed_requests: List[LLMRequestResponse]
 
 @app.post("/v2/research", response_model=JobResponse)
 async def create_research_job(query: ResearchQuery, db: Session = Depends(get_db)):
@@ -182,6 +200,54 @@ async def get_dossier(dossier_id: str, db: Session = Depends(get_db)):
             ) for item in evidence_items
         ],
         summary_of_findings=dossier.summary_of_findings or ""
+    )
+
+@app.get("/v2/research/{job_id}/llm-requests", response_model=LLMRequestsResponse)
+async def get_llm_requests(job_id: str, db: Session = Depends(get_db)):
+    """Get all LLM requests for a specific job"""
+    
+    # Verify job exists
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Get all LLM requests for this job
+    llm_requests = db.query(LLMRequest).filter(LLMRequest.job_id == job_id).order_by(LLMRequest.created_at.desc()).all()
+    
+    # Categorize requests by status
+    pending_requests = []
+    in_progress_requests = []
+    completed_requests = []
+    failed_requests = []
+    
+    for req in llm_requests:
+        request_data = LLMRequestResponse(
+            id=req.id,
+            request_type=req.request_type.value,
+            status=req.status.value,
+            prompt=req.prompt[:200] + "..." if len(req.prompt) > 200 else req.prompt,  # Truncate long prompts
+            response=req.response,
+            error_message=req.error_message,
+            started_at=req.started_at.isoformat() if req.started_at else None,
+            completed_at=req.completed_at.isoformat() if req.completed_at else None,
+            created_at=req.created_at.isoformat(),
+            dossier_id=req.dossier_id
+        )
+        
+        if req.status == LLMRequestStatus.PENDING:
+            pending_requests.append(request_data)
+        elif req.status == LLMRequestStatus.IN_PROGRESS:
+            in_progress_requests.append(request_data)
+        elif req.status == LLMRequestStatus.COMPLETED:
+            completed_requests.append(request_data)
+        elif req.status == LLMRequestStatus.FAILED:
+            failed_requests.append(request_data)
+    
+    return LLMRequestsResponse(
+        pending_requests=pending_requests,
+        in_progress_requests=in_progress_requests,
+        completed_requests=completed_requests,
+        failed_requests=failed_requests
     )
 
 if __name__ == "__main__":
