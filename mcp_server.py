@@ -3,6 +3,8 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import json
 import uuid
+import time
+import asyncio
 
 app = FastAPI(title="Mock MCP Server", version="1.0.0")
 
@@ -165,15 +167,19 @@ class MCPSearchResponse(BaseModel):
 
 @app.get("/manifest", response_model=MCPManifest)
 async def get_manifest():
-    """Return the MCP server manifest with available tools"""
+    """Get the MCP server manifest with available tools"""
+    
+    # Add a small delay to simulate network latency
+    await asyncio.sleep(0.5)
+    
     return MCPManifest(
         name="Mock MCP Server",
         version="1.0.0",
-        description="A mock MCP server for testing the Research Agent with predefined data sources",
+        description="A mock MCP server for testing the Agentic Retrieval system",
         tools=[
             {
                 "name": "market-data-api",
-                "description": "Access to market data and trends analysis",
+                "description": "Market data and trends analysis",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -185,8 +191,8 @@ async def get_manifest():
                 }
             },
             {
-                "name": "expert-analysis-db", 
-                "description": "Database of expert opinions and analyst reports",
+                "name": "expert-analysis-db",
+                "description": "Expert opinions and analysis database",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -199,7 +205,7 @@ async def get_manifest():
             },
             {
                 "name": "competitive-analysis-api",
-                "description": "Competitive analysis and market position data",
+                "description": "Competitive analysis and market positioning",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -255,6 +261,10 @@ async def get_manifest():
 @app.post("/search", response_model=MCPSearchResponse)
 async def search_data(request: MCPSearchRequest):
     """Search for data based on query and tool selection"""
+    
+    # Add a delay to simulate tool processing time (2-4 seconds)
+    delay = 2 + (hash(request.query) % 3)  # 2-4 seconds based on query hash
+    await asyncio.sleep(delay)
     
     # Determine which data source to search based on tool_name
     data_source = None

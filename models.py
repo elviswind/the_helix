@@ -41,6 +41,16 @@ class LLMRequestType(enum.Enum):
     QUERY_FORMULATION = "QUERY_FORMULATION"
     SYNTHESIS = "SYNTHESIS"
 
+class ToolRequestStatus(enum.Enum):
+    PENDING = "PENDING"
+    IN_PROGRESS = "IN_PROGRESS"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+class ToolRequestType(enum.Enum):
+    MCP_SEARCH = "MCP_SEARCH"
+    MCP_MANIFEST = "MCP_MANIFEST"
+
 class Job(Base):
     __tablename__ = "jobs"
     
@@ -132,6 +142,28 @@ class LLMRequest(Base):
     # Relationships
     job = relationship("Job")
     dossier = relationship("EvidenceDossier")
+
+class ToolRequest(Base):
+    __tablename__ = "tool_requests"
+    
+    id = Column(String, primary_key=True)
+    job_id = Column(String, ForeignKey("jobs.id"), nullable=False)
+    dossier_id = Column(String, ForeignKey("evidence_dossiers.id"), nullable=True)  # Optional, for dossier-specific requests
+    step_id = Column(String, ForeignKey("research_plan_steps.id"), nullable=True)  # Optional, for step-specific requests
+    request_type = Column(Enum(ToolRequestType), nullable=False)
+    tool_name = Column(String, nullable=False)
+    query = Column(Text, nullable=True)  # For search requests
+    status = Column(Enum(ToolRequestStatus), default=ToolRequestStatus.PENDING)
+    response = Column(Text, nullable=True)  # JSON string of results
+    error_message = Column(Text, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    job = relationship("Job")
+    dossier = relationship("EvidenceDossier")
+    step = relationship("ResearchPlanStep")
 
 # Database setup
 DATABASE_URL = "sqlite:///./ar_system.db"

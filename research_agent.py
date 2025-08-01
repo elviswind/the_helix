@@ -4,7 +4,8 @@ import requests
 from sqlalchemy.orm import Session
 from models import (
     EvidenceDossier, ResearchPlan, ResearchPlanStep, EvidenceItem,
-    DossierStatus, StepStatus, SessionLocal, LLMRequest, LLMRequestStatus, LLMRequestType, Job, JobStatus
+    DossierStatus, StepStatus, SessionLocal, LLMRequest, LLMRequestStatus, LLMRequestType,
+    ToolRequest, ToolRequestStatus, ToolRequestType, JobStatus, Job
 )
 from celery_app import celery_app
 from datetime import datetime
@@ -41,6 +42,118 @@ class MCPClient:
         except Exception as e:
             print(f"MCP search error: {e}")
             return {"results": [], "total_count": 0}
+
+class TrackingMCPClient:
+    """Client for interacting with the MCP server with request tracking"""
+    
+    def __init__(self, base_url="http://localhost:8001"):
+        self.base_url = base_url
+    
+    def get_manifest(self, job_id: str, dossier_id: str = None, step_id: str = None):
+        """Get the MCP server manifest with request tracking"""
+        
+        # Create tool request record
+        db = SessionLocal()
+        try:
+            tool_request = ToolRequest(
+                id=f"tool-{uuid.uuid4().hex[:8]}",
+                job_id=job_id,
+                dossier_id=dossier_id,
+                step_id=step_id,
+                request_type=ToolRequestType.MCP_MANIFEST,
+                tool_name="mcp-manifest",
+                status=ToolRequestStatus.PENDING
+            )
+            db.add(tool_request)
+            db.commit()
+            
+            # Update status to in progress
+            tool_request.status = ToolRequestStatus.IN_PROGRESS
+            tool_request.started_at = datetime.utcnow()
+            db.commit()
+            
+            try:
+                response = requests.get(f"{self.base_url}/manifest", timeout=30)
+                response.raise_for_status()
+                result = response.json()
+                
+                # Update request as completed
+                tool_request.status = ToolRequestStatus.COMPLETED
+                tool_request.response = json.dumps(result)
+                tool_request.completed_at = datetime.utcnow()
+                db.commit()
+                
+                return result
+                
+            except Exception as e:
+                # Update request as failed
+                tool_request.status = ToolRequestStatus.FAILED
+                tool_request.error_message = str(e)
+                tool_request.completed_at = datetime.utcnow()
+                db.commit()
+                print(f"MCP manifest error: {e}")
+                return None
+                
+        finally:
+            db.close()
+    
+    def search(self, query: str, tool_name: str, job_id: str, dossier_id: str = None, 
+               step_id: str = None, max_results: int = 10):
+        """Search for data using the MCP server with request tracking"""
+        
+        # Create tool request record
+        db = SessionLocal()
+        try:
+            tool_request = ToolRequest(
+                id=f"tool-{uuid.uuid4().hex[:8]}",
+                job_id=job_id,
+                dossier_id=dossier_id,
+                step_id=step_id,
+                request_type=ToolRequestType.MCP_SEARCH,
+                tool_name=tool_name,
+                query=query,
+                status=ToolRequestStatus.PENDING
+            )
+            db.add(tool_request)
+            db.commit()
+            
+            # Update status to in progress
+            tool_request.status = ToolRequestStatus.IN_PROGRESS
+            tool_request.started_at = datetime.utcnow()
+            db.commit()
+            
+            try:
+                response = requests.post(
+                    f"{self.base_url}/search",
+                    json={
+                        "query": query,
+                        "tool_name": tool_name,
+                        "max_results": max_results
+                    },
+                    timeout=60  # 1 minute timeout for search
+                )
+                response.raise_for_status()
+                result = response.json()
+                
+                # Update request as completed
+                tool_request.status = ToolRequestStatus.COMPLETED
+                tool_request.response = json.dumps(result)
+                tool_request.completed_at = datetime.utcnow()
+                db.commit()
+                
+                return result
+                
+            except Exception as e:
+                # Update request as failed
+                tool_request.status = ToolRequestStatus.FAILED
+                tool_request.error_message = str(e)
+                tool_request.completed_at = datetime.utcnow()
+                db.commit()
+                print(f"MCP search error: {e}")
+                return {"results": [], "total_count": 0}
+                
+        finally:
+            db.close()
 
 class TrackingLLMClient:
     """Client for interacting with the LLM via Ollama with request tracking"""
@@ -82,8 +195,7 @@ class TrackingLLMClient:
                         "options": {
                             "temperature": 0.7,
                         }
-                    },
-                    timeout=120  # 2 minute timeout
+                    }
                 )
                 response.raise_for_status()
                 result = response.json()["response"]
@@ -104,6 +216,7 @@ class TrackingLLMClient:
                 db.commit()
                 
                 print(f"LLM API error: {e}")
+                # Fallback to mock response for development
                 return self._mock_response(prompt)
                 
         finally:
@@ -155,31 +268,38 @@ class LLMClient:
             return "Mock response for development"
 
 class ResearchAgent:
-    """Agent responsible for executing research plans and gathering evidence"""
+    """Research Agent that executes research plans using LLM and MCP tools"""
     
     def __init__(self):
         self.llm_client = TrackingLLMClient()
-        self.mcp_client = MCPClient()
+        self.mcp_client = TrackingMCPClient()
     
     def select_tool(self, step_description: str, available_tools: list, job_id: str, dossier_id: str) -> str:
         """Use LLM to select the best tool for a research step"""
         
-        tools_info = "\n".join([f"- {tool['name']}: {tool['description']}" for tool in available_tools])
+        # Create a prompt for tool selection
+        tools_text = "\n".join([f"- {tool['name']}: {tool['description']}" for tool in available_tools])
         
-        prompt = f"""
-You are a research agent that needs to select the most appropriate tool for a research step.
+        prompt = f"""You are a research agent that needs to select the best tool for a research step.
 
 Available tools:
-{tools_info}
+{tools_text}
 
 Research step: {step_description}
 
-Based on the research step description, which tool would be most appropriate? 
-Respond with only the tool name (e.g., "market-data-api").
-"""
+Based on the research step description, select the most appropriate tool from the list above. 
+Respond with ONLY the tool name (e.g., "market-data-api").
+
+Selected tool:"""
         
-        response = self.llm_client.generate(prompt, job_id, LLMRequestType.TOOL_SELECTION, dossier_id)
-        # Clean up the response to get just the tool name
+        response = self.llm_client.generate(
+            prompt=prompt,
+            job_id=job_id,
+            request_type=LLMRequestType.TOOL_SELECTION,
+            dossier_id=dossier_id
+        )
+        
+        # Extract tool name from response
         tool_name = response.strip().split('\n')[0].strip()
         
         # Validate that the tool exists
@@ -191,34 +311,37 @@ Respond with only the tool name (e.g., "market-data-api").
         return tool_name
     
     def formulate_query(self, step_description: str, tool_name: str, job_id: str, dossier_id: str) -> str:
-        """Use LLM to formulate an appropriate query for the selected tool"""
+        """Use LLM to formulate a query for the selected tool"""
         
-        prompt = f"""
-You are a research agent that needs to formulate a search query for a specific tool.
+        prompt = f"""You are a research agent that needs to formulate a search query for a tool.
 
 Research step: {step_description}
 Selected tool: {tool_name}
 
-Based on the research step and the tool, formulate a very simple search query using only ONE common keyword.
-The query should be general and use a basic term that is likely to match available data.
+Formulate a specific, focused search query that will help gather evidence for this research step.
+The query should be clear and targeted to get relevant results from the tool.
 
-For relationship topics, use simple terms like: "attraction", "marriage", "relationship", "dating"
-For market topics, use simple terms like: "market", "growth", "risk", "financial"
-
-Respond with only ONE word (e.g., "attraction").
-"""
+Query:"""
         
-        response = self.llm_client.generate(prompt, job_id, LLMRequestType.QUERY_FORMULATION, dossier_id)
-        return response.strip()
+        response = self.llm_client.generate(
+            prompt=prompt,
+            job_id=job_id,
+            request_type=LLMRequestType.QUERY_FORMULATION,
+            dossier_id=dossier_id
+        )
+        
+        # Extract query from response
+        query = response.strip().split('\n')[0].strip()
+        return query
     
     def execute_step(self, db: Session, step: ResearchPlanStep, dossier: EvidenceDossier):
         """Execute a single research plan step"""
         
-        # Get the job ID for LLM request tracking
+        # Get the job ID for tracking
         job_id = dossier.job_id
         
-        # Get available tools from MCP server
-        manifest = self.mcp_client.get_manifest()
+        # Get available tools from MCP server with tracking
+        manifest = self.mcp_client.get_manifest(job_id, dossier.id, step.id)
         if not manifest:
             # Fallback to default tools if MCP server is unavailable
             available_tools = [
@@ -238,8 +361,8 @@ Respond with only ONE word (e.g., "attraction").
         query = self.formulate_query(step.description, tool_name, job_id, dossier.id)
         tool_query_rationale = f"Formulated query '{query}' to gather evidence for: {step.description}"
         
-        # Step 3: Execute the search
-        search_results = self.mcp_client.search(query, tool_name)
+        # Step 3: Execute the search with tracking
+        search_results = self.mcp_client.search(query, tool_name, job_id, dossier.id, step.id)
         
         # Step 4: Update the step with results and justifications
         step.tool_used = tool_name
@@ -333,13 +456,24 @@ def research_agent_task(self, dossier_id: str):
                 # Check if all dossiers are in AWAITING_VERIFICATION status
                 all_complete = all(d.status == DossierStatus.AWAITING_VERIFICATION for d in all_dossiers)
                 
+                print(f"Research agent task for dossier {dossier_id}: all_complete={all_complete}, dossier_count={len(all_dossiers)}")
+                
                 if all_complete:
                     # Update job status to AWAITING_VERIFICATION
                     job = db.query(Job).filter(Job.id == job_id).first()
                     if job:
-                        job.status = JobStatus.AWAITING_VERIFICATION
-                        db.commit()
-                        print(f"Job {job_id} updated to AWAITING_VERIFICATION - all dossiers complete")
+                        try:
+                            job.status = JobStatus.AWAITING_VERIFICATION
+                            db.commit()
+                            print(f"Job {job_id} updated to AWAITING_VERIFICATION - all dossiers complete")
+                        except Exception as e:
+                            print(f"Error updating job status: {e}")
+                            db.rollback()
+                            raise
+                    else:
+                        print(f"Warning: Job {job_id} not found when trying to update status")
+                else:
+                    print(f"Not all dossiers complete for job {job_id}. Dossier statuses: {[d.status.value for d in all_dossiers]}")
             
             self.update_state(state='SUCCESS', meta={'status': 'Research completed'})
             
@@ -353,5 +487,6 @@ def research_agent_task(self, dossier_id: str):
             db.close()
             
     except Exception as e:
+        print(f"Research agent task failed for dossier {dossier_id}: {e}")
         self.update_state(state='FAILURE', meta={'error': str(e)})
         raise 

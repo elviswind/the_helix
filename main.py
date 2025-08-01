@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 import threading
 from celery.result import AsyncResult
 
-from models import get_db, create_tables, Job, EvidenceDossier, ResearchPlan, ResearchPlanStep, EvidenceItem, SessionLocal, LLMRequest, LLMRequestStatus, LLMRequestType
+from models import get_db, create_tables, Job, EvidenceDossier, ResearchPlan, ResearchPlanStep, EvidenceItem, SessionLocal, LLMRequest, LLMRequestStatus, LLMRequestType, ToolRequest, ToolRequestStatus, ToolRequestType
 from services import CannedResearchService
 from orchestrator_agent import orchestrator_task
 
@@ -89,6 +89,26 @@ class LLMRequestsResponse(BaseModel):
     in_progress_requests: List[LLMRequestResponse]
     completed_requests: List[LLMRequestResponse]
     failed_requests: List[LLMRequestResponse]
+
+class ToolRequestResponse(BaseModel):
+    id: str
+    request_type: str
+    tool_name: str
+    query: str | None = None
+    status: str
+    response: str | None = None
+    error_message: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    created_at: str
+    dossier_id: str | None = None
+    step_id: str | None = None
+
+class ToolRequestsResponse(BaseModel):
+    pending_requests: List[ToolRequestResponse]
+    in_progress_requests: List[ToolRequestResponse]
+    completed_requests: List[ToolRequestResponse]
+    failed_requests: List[ToolRequestResponse]
 
 @app.post("/v2/research", response_model=JobResponse)
 async def create_research_job(query: ResearchQuery, db: Session = Depends(get_db)):
@@ -249,6 +269,73 @@ async def get_llm_requests(job_id: str, db: Session = Depends(get_db)):
         completed_requests=completed_requests,
         failed_requests=failed_requests
     )
+
+@app.get("/v2/research/{job_id}/tool-requests", response_model=ToolRequestsResponse)
+async def get_tool_requests(job_id: str, db: Session = Depends(get_db)):
+    """Get all tool requests for a job, grouped by status"""
+    
+    # Verify job exists
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Get all tool requests for the job
+    tool_requests = db.query(ToolRequest).filter(ToolRequest.job_id == job_id).all()
+    
+    # Group by status
+    pending_requests = []
+    in_progress_requests = []
+    completed_requests = []
+    failed_requests = []
+    
+    for req in tool_requests:
+        response = ToolRequestResponse(
+            id=req.id,
+            request_type=req.request_type.value,
+            tool_name=req.tool_name,
+            query=req.query,
+            status=req.status.value,
+            response=req.response,
+            error_message=req.error_message,
+            started_at=req.started_at.isoformat() if req.started_at else None,
+            completed_at=req.completed_at.isoformat() if req.completed_at else None,
+            created_at=req.created_at.isoformat(),
+            dossier_id=req.dossier_id,
+            step_id=req.step_id
+        )
+        
+        if req.status == ToolRequestStatus.PENDING:
+            pending_requests.append(response)
+        elif req.status == ToolRequestStatus.IN_PROGRESS:
+            in_progress_requests.append(response)
+        elif req.status == ToolRequestStatus.COMPLETED:
+            completed_requests.append(response)
+        elif req.status == ToolRequestStatus.FAILED:
+            failed_requests.append(response)
+    
+    return ToolRequestsResponse(
+        pending_requests=pending_requests,
+        in_progress_requests=in_progress_requests,
+        completed_requests=completed_requests,
+        failed_requests=failed_requests
+    )
+
+@app.get("/v2/research/recent")
+async def get_recent_jobs(db: Session = Depends(get_db)):
+    """Get recent jobs for testing purposes"""
+    
+    # Get the 5 most recent jobs
+    jobs = db.query(Job).order_by(Job.created_at.desc()).limit(5).all()
+    
+    return [
+        {
+            "id": job.id,
+            "query": job.query,
+            "status": job.status.value,
+            "created_at": job.created_at.isoformat()
+        }
+        for job in jobs
+    ]
 
 if __name__ == "__main__":
     import uvicorn

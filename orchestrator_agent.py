@@ -53,7 +53,6 @@ class TrackingLLMClient:
                             "temperature": 0.7,
                         }
                     },
-                    timeout=120  # 2 minute timeout
                 )
                 response.raise_for_status()
                 result = response.json()["response"]
