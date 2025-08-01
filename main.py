@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import time
 import uuid
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 import threading
 from celery.result import AsyncResult
@@ -14,7 +14,7 @@ from models import get_db, create_tables, Job, EvidenceDossier, ResearchPlan, Re
 from services import CannedResearchService
 from orchestrator_agent import orchestrator_task
 
-app = FastAPI(title="Agentic Retrieval System v2.0", version="2.0.0")
+app = FastAPI(title="Agentic Retrieval System v3.0", version="3.0.0")
 
 # Enable CORS for frontend
 app.add_middleware(
@@ -50,6 +50,7 @@ class EvidenceItemResponse(BaseModel):
     content: str
     source: str
     confidence: float
+    tags: Optional[List[str]] = None  # New field for proxy evidence tags
 
 class ResearchPlanStepResponse(BaseModel):
     step_id: str
@@ -59,6 +60,9 @@ class ResearchPlanStepResponse(BaseModel):
     tool_used: str | None = None
     tool_selection_justification: str | None = None
     tool_query_rationale: str | None = None
+    # New fields for Deductive Proxy Framework
+    data_gap_identified: str | None = None
+    proxy_hypothesis: Dict[str, str] | None = None
 
 class ResearchPlanResponse(BaseModel):
     plan_id: str
@@ -206,7 +210,9 @@ async def get_dossier(dossier_id: str, db: Session = Depends(get_db)):
                     status=step.status.value,
                     tool_used=step.tool_used,
                     tool_selection_justification=step.tool_selection_justification,
-                    tool_query_rationale=step.tool_query_rationale
+                    tool_query_rationale=step.tool_query_rationale,
+                    data_gap_identified=step.data_gap_identified,
+                    proxy_hypothesis=step.proxy_hypothesis
                 ) for step in steps
             ]
         ),
@@ -216,7 +222,8 @@ async def get_dossier(dossier_id: str, db: Session = Depends(get_db)):
                 title=item.title,
                 content=item.content,
                 source=item.source,
-                confidence=item.confidence
+                confidence=item.confidence,
+                tags=item.tags
             ) for item in evidence_items
         ],
         summary_of_findings=dossier.summary_of_findings or ""

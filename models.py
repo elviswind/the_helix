@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, String, Integer, Float, DateTime, Text, ForeignKey, Enum
+from sqlalchemy import create_engine, Column, String, Integer, Float, DateTime, Text, ForeignKey, Enum, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
@@ -104,6 +104,9 @@ class ResearchPlanStep(Base):
     tool_selection_justification = Column(Text)
     tool_query_rationale = Column(Text)
     dependencies = Column(Text)  # JSON string of step IDs
+    # New fields for Deductive Proxy Framework
+    data_gap_identified = Column(Text)  # Description of the data gap when direct data is unavailable
+    proxy_hypothesis = Column(JSON)  # JSON object containing unobservable_claim, deductive_chain, observable_proxy
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -119,6 +122,8 @@ class EvidenceItem(Base):
     content = Column(Text, nullable=False)
     source = Column(String, nullable=False)
     confidence = Column(Float, nullable=False)
+    # New field for linking evidence to proxy hypotheses
+    tags = Column(JSON)  # Array of strings to link evidence back to a proxy
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationships

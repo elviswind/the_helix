@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Research Results - AR System v2.0</title>
+    <title>Research Results - AR System v3.0</title>
     <style>
         * {
             margin: 0;
@@ -734,27 +734,62 @@
             
             // Display thesis plan
             const thesisPlan = document.getElementById('thesis-plan');
-            thesisPlan.innerHTML = thesis.research_plan.steps.map(step => `
-                <li class="plan-step">
-                    <h4>${step.description}</h4>
-                    <p><strong>Tool:</strong> ${step.tool_used}</p>
-                    <p><strong>Justification:</strong> ${step.tool_selection_justification}</p>
-                    <p><strong>Rationale:</strong> ${step.tool_query_rationale}</p>
-                </li>
-            `).join('');
+            thesisPlan.innerHTML = thesis.research_plan.steps.map(step => {
+                let stepHtml = `
+                    <li class="plan-step">
+                        <h4>${step.description}</h4>
+                        <p><strong>Tool:</strong> ${step.tool_used || 'Not selected'}</p>
+                        <p><strong>Justification:</strong> ${step.tool_selection_justification || 'Not available'}</p>
+                        <p><strong>Rationale:</strong> ${step.tool_query_rationale || 'Not available'}</p>`;
+                
+                // Add Deductive Proxy Framework information if available
+                if (step.data_gap_identified) {
+                    stepHtml += `
+                        <div class="proxy-section" style="background: #f8f9fa; padding: 15px; margin: 10px 0; border-left: 4px solid #007bff; border-radius: 4px;">
+                            <h5 style="color: #007bff; margin-bottom: 10px;">🔍 Deductive Proxy Framework</h5>
+                            <p><strong>Data Gap Identified:</strong> ${step.data_gap_identified}</p>`;
+                    
+                    if (step.proxy_hypothesis) {
+                        stepHtml += `
+                            <div style="margin-top: 10px;">
+                                <p><strong>Unobservable Claim:</strong> ${step.proxy_hypothesis.unobservable_claim || 'Not specified'}</p>
+                                <p><strong>Deductive Chain:</strong> ${step.proxy_hypothesis.deductive_chain || 'Not specified'}</p>
+                                <p><strong>Observable Proxy:</strong> ${step.proxy_hypothesis.observable_proxy || 'Not specified'}</p>
+                            </div>`;
+                    }
+                    
+                    stepHtml += `</div>`;
+                }
+                
+                stepHtml += `</li>`;
+                return stepHtml;
+            }).join('');
 
             // Display thesis evidence
             const thesisEvidence = document.getElementById('thesis-evidence');
-            thesisEvidence.innerHTML = thesis.evidence_items.map(item => `
-                <div class="evidence-item">
-                    <div class="evidence-title">${item.title}</div>
-                    <div class="evidence-content">${item.content}</div>
-                    <div class="evidence-meta">
-                        <span>Source: ${item.source}</span>
-                        <span class="confidence">${Math.round(item.confidence * 100)}% confidence</span>
-                    </div>
-                </div>
-            `).join('');
+            thesisEvidence.innerHTML = thesis.evidence_items.map(item => {
+                let evidenceHtml = `
+                    <div class="evidence-item">
+                        <div class="evidence-title">${item.title}</div>
+                        <div class="evidence-content">${item.content}</div>
+                        <div class="evidence-meta">
+                            <span>Source: ${item.source}</span>
+                            <span class="confidence">${Math.round(item.confidence * 100)}% confidence</span>`;
+                
+                // Add tags if available (for proxy evidence)
+                if (item.tags && item.tags.length > 0) {
+                    evidenceHtml += `
+                            <div style="margin-top: 5px;">
+                                <span style="background: #007bff; color: white; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; margin-right: 5px;">🔍 Proxy Evidence</span>
+                                ${item.tags.map(tag => `<span style="background: #6c757d; color: white; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; margin-right: 5px;">${tag}</span>`).join('')}
+                            </div>`;
+                }
+                
+                evidenceHtml += `
+                        </div>
+                    </div>`;
+                return evidenceHtml;
+            }).join('');
 
             // Display antithesis data
             const antithesis = dossierData.antithesis;
@@ -763,27 +798,62 @@
             
             // Display antithesis plan
             const antithesisPlan = document.getElementById('antithesis-plan');
-            antithesisPlan.innerHTML = antithesis.research_plan.steps.map(step => `
-                <li class="plan-step">
-                    <h4>${step.description}</h4>
-                    <p><strong>Tool:</strong> ${step.tool_used}</p>
-                    <p><strong>Justification:</strong> ${step.tool_selection_justification}</p>
-                    <p><strong>Rationale:</strong> ${step.tool_query_rationale}</p>
-                </li>
-            `).join('');
+            antithesisPlan.innerHTML = antithesis.research_plan.steps.map(step => {
+                let stepHtml = `
+                    <li class="plan-step">
+                        <h4>${step.description}</h4>
+                        <p><strong>Tool:</strong> ${step.tool_used || 'Not selected'}</p>
+                        <p><strong>Justification:</strong> ${step.tool_selection_justification || 'Not available'}</p>
+                        <p><strong>Rationale:</strong> ${step.tool_query_rationale || 'Not available'}</p>`;
+                
+                // Add Deductive Proxy Framework information if available
+                if (step.data_gap_identified) {
+                    stepHtml += `
+                        <div class="proxy-section" style="background: #f8f9fa; padding: 15px; margin: 10px 0; border-left: 4px solid #007bff; border-radius: 4px;">
+                            <h5 style="color: #007bff; margin-bottom: 10px;">🔍 Deductive Proxy Framework</h5>
+                            <p><strong>Data Gap Identified:</strong> ${step.data_gap_identified}</p>`;
+                    
+                    if (step.proxy_hypothesis) {
+                        stepHtml += `
+                            <div style="margin-top: 10px;">
+                                <p><strong>Unobservable Claim:</strong> ${step.proxy_hypothesis.unobservable_claim || 'Not specified'}</p>
+                                <p><strong>Deductive Chain:</strong> ${step.proxy_hypothesis.deductive_chain || 'Not specified'}</p>
+                                <p><strong>Observable Proxy:</strong> ${step.proxy_hypothesis.observable_proxy || 'Not specified'}</p>
+                            </div>`;
+                    }
+                    
+                    stepHtml += `</div>`;
+                }
+                
+                stepHtml += `</li>`;
+                return stepHtml;
+            }).join('');
 
             // Display antithesis evidence
             const antithesisEvidence = document.getElementById('antithesis-evidence');
-            antithesisEvidence.innerHTML = antithesis.evidence_items.map(item => `
-                <div class="evidence-item">
-                    <div class="evidence-title">${item.title}</div>
-                    <div class="evidence-content">${item.content}</div>
-                    <div class="evidence-meta">
-                        <span>Source: ${item.source}</span>
-                        <span class="confidence">${Math.round(item.confidence * 100)}% confidence</span>
-                    </div>
-                </div>
-            `).join('');
+            antithesisEvidence.innerHTML = antithesis.evidence_items.map(item => {
+                let evidenceHtml = `
+                    <div class="evidence-item">
+                        <div class="evidence-title">${item.title}</div>
+                        <div class="evidence-content">${item.content}</div>
+                        <div class="evidence-meta">
+                            <span>Source: ${item.source}</span>
+                            <span class="confidence">${Math.round(item.confidence * 100)}% confidence</span>`;
+                
+                // Add tags if available (for proxy evidence)
+                if (item.tags && item.tags.length > 0) {
+                    evidenceHtml += `
+                            <div style="margin-top: 5px;">
+                                <span style="background: #007bff; color: white; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; margin-right: 5px;">🔍 Proxy Evidence</span>
+                                ${item.tags.map(tag => `<span style="background: #6c757d; color: white; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; margin-right: 5px;">${tag}</span>`).join('')}
+                            </div>`;
+                }
+                
+                evidenceHtml += `
+                        </div>
+                    </div>`;
+                return evidenceHtml;
+            }).join('');
         }
 
         function showError(message) {

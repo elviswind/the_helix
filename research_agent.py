@@ -123,15 +123,26 @@ class TrackingMCPClient:
             db.commit()
             
             try:
-                response = requests.post(
-                    f"{self.base_url}/search",
-                    json={
-                        "query": query,
-                        "tool_name": tool_name,
-                        "max_results": max_results
-                    },
-                    timeout=60  # 1 minute timeout for search
-                )
+                # Parse the query to extract parameters based on tool type
+                if tool_name == "10k-financial-reports":
+                    # Query format: "ticker:AAPL section:business_overview"
+                    params = self._parse_10k_query(query)
+                    response = requests.post(
+                        f"{self.base_url}/10k-report",
+                        json=params,
+                        timeout=60
+                    )
+                elif tool_name == "eod-stock-prices":
+                    # Query format: "ticker:AAPL"
+                    params = self._parse_stock_query(query)
+                    response = requests.post(
+                        f"{self.base_url}/stock-price",
+                        json=params,
+                        timeout=60
+                    )
+                else:
+                    raise ValueError(f"Unknown tool: {tool_name}")
+                
                 response.raise_for_status()
                 result = response.json()
                 
@@ -154,6 +165,34 @@ class TrackingMCPClient:
                 
         finally:
             db.close()
+    
+    def _parse_10k_query(self, query: str) -> dict:
+        """Parse 10-K query to extract ticker and section"""
+        # Expected format: "ticker:AAPL section:business_overview"
+        params = {}
+        for part in query.split():
+            if part.startswith("ticker:"):
+                params["ticker"] = part.split(":", 1)[1]
+            elif part.startswith("section:"):
+                params["section"] = part.split(":", 1)[1]
+        
+        if "ticker" not in params or "section" not in params:
+            raise ValueError("10-K query must include both ticker and section parameters")
+        
+        return params
+    
+    def _parse_stock_query(self, query: str) -> dict:
+        """Parse stock price query to extract ticker"""
+        # Expected format: "ticker:AAPL"
+        params = {}
+        for part in query.split():
+            if part.startswith("ticker:"):
+                params["ticker"] = part.split(":", 1)[1]
+        
+        if "ticker" not in params:
+            raise ValueError("Stock price query must include ticker parameter")
+        
+        return params
 
 class TrackingLLMClient:
     """Client for interacting with the LLM via Ollama with request tracking"""
@@ -274,6 +313,113 @@ class ResearchAgent:
         self.llm_client = TrackingLLMClient()
         self.mcp_client = TrackingMCPClient()
     
+    def check_for_direct_data(self, step_description: str, available_tools: list) -> bool:
+        """Check if direct data is available for the research step"""
+        
+        # Create a prompt to assess if direct data is available
+        tools_text = "\n".join([f"- {tool['name']}: {tool['description']}" for tool in available_tools])
+        
+        prompt = f"""You are a research agent assessing whether direct data is available for a research step.
+
+Available tools:
+{tools_text}
+
+Research step: {step_description}
+
+Based on the research step description and available tools, determine if direct data is available.
+Consider whether the step asks for:
+1. Observable, measurable data (e.g., financial metrics, market data, concrete facts)
+2. Abstract concepts that require proxy measurement (e.g., "company moat", "brand strength", "management quality")
+
+Respond with ONLY "YES" if direct data is available, or "NO" if a proxy hypothesis would be needed.
+
+Assessment:"""
+        
+        response = self.llm_client.generate(
+            prompt=prompt,
+            job_id="check-direct-data",  # We don't have job_id here, using placeholder
+            request_type=LLMRequestType.TOOL_SELECTION,
+            dossier_id=None
+        )
+        
+        # Extract response and determine if direct data is available
+        assessment = response.strip().upper()
+        return "YES" in assessment
+    
+    def identify_data_gap(self, step_description: str, available_tools: list, job_id: str, dossier_id: str) -> str:
+        """Identify and describe the data gap when direct data is unavailable"""
+        
+        tools_text = "\n".join([f"- {tool['name']}: {tool['description']}" for tool in available_tools])
+        
+        prompt = f"""You are a research agent identifying a data gap in your research.
+
+Research step: {step_description}
+
+Available tools:
+{tools_text}
+
+The research step requires information that cannot be directly measured or observed with the available tools.
+Describe the specific data gap - what information is needed but cannot be directly obtained?
+
+Provide a clear, concise description of the data gap.
+
+Data gap:"""
+        
+        response = self.llm_client.generate(
+            prompt=prompt,
+            job_id=job_id,
+            request_type=LLMRequestType.TOOL_SELECTION,
+            dossier_id=dossier_id
+        )
+        
+        return response.strip()
+    
+    def formulate_proxy_hypothesis(self, step_description: str, data_gap: str, job_id: str, dossier_id: str) -> dict:
+        """Formulate a proxy hypothesis to bridge the data gap"""
+        
+        prompt = f"""You are a research agent formulating a proxy hypothesis to bridge a data gap.
+
+Research step: {step_description}
+Data gap: {data_gap}
+
+You need to create a logical chain that connects the unobservable claim to an observable, measurable data proxy.
+
+Respond with a JSON object in this exact format:
+{{
+    "unobservable_claim": "The specific claim that cannot be directly measured",
+    "deductive_chain": "The logical reasoning that connects the unobservable claim to an observable proxy",
+    "observable_proxy": "The specific, measurable data point that can serve as a proxy"
+}}
+
+Example:
+For "assess company moat", a proxy might be:
+{{
+    "unobservable_claim": "The company possesses a durable competitive moat",
+    "deductive_chain": "If a strong moat exists, the company can raise prices without losing customers, leading to sustained high profitability",
+    "observable_proxy": "Consistently high and stable Gross Profit Margins (>70%) for the last 10 years, relative to peers"
+}}
+
+Proxy hypothesis:"""
+        
+        response = self.llm_client.generate(
+            prompt=prompt,
+            job_id=job_id,
+            request_type=LLMRequestType.TOOL_SELECTION,
+            dossier_id=dossier_id
+        )
+        
+        try:
+            # Try to parse the JSON response
+            proxy_hypothesis = json.loads(response.strip())
+            return proxy_hypothesis
+        except json.JSONDecodeError:
+            # Fallback if JSON parsing fails
+            return {
+                "unobservable_claim": f"Cannot directly measure: {step_description}",
+                "deductive_chain": "Using available data to infer the required information",
+                "observable_proxy": "Relevant financial and market metrics"
+            }
+    
     def select_tool(self, step_description: str, available_tools: list, job_id: str, dossier_id: str) -> str:
         """Use LLM to select the best tool for a research step"""
         
@@ -313,7 +459,35 @@ Selected tool:"""
     def formulate_query(self, step_description: str, tool_name: str, job_id: str, dossier_id: str) -> str:
         """Use LLM to formulate a query for the selected tool"""
         
-        prompt = f"""You are a research agent that needs to formulate a search query for a tool.
+        if tool_name == "10k-financial-reports":
+            prompt = f"""You are a research agent that needs to formulate a query for the 10-K financial reports tool.
+
+Research step: {step_description}
+Selected tool: {tool_name}
+
+This tool requires two parameters:
+1. ticker: A stock ticker symbol (e.g., AAPL, MSFT, GOOGL)
+2. section: The section of the 10-K to retrieve (business_overview, risk_factors, management_discussion, financial_statements, executive_compensation)
+
+Based on the research step, determine which company's 10-K and which section would be most relevant.
+Respond in the format: "ticker:AAPL section:business_overview"
+
+Query:"""
+        elif tool_name == "eod-stock-prices":
+            prompt = f"""You are a research agent that needs to formulate a query for the EOD stock prices tool.
+
+Research step: {step_description}
+Selected tool: {tool_name}
+
+This tool requires one parameter:
+1. ticker: A stock ticker symbol (e.g., AAPL, MSFT, GOOGL, TSLA, AMZN)
+
+Based on the research step, determine which company's stock price data would be most relevant.
+Respond in the format: "ticker:AAPL"
+
+Query:"""
+        else:
+            prompt = f"""You are a research agent that needs to formulate a search query for a tool.
 
 Research step: {step_description}
 Selected tool: {tool_name}
@@ -335,7 +509,7 @@ Query:"""
         return query
     
     def execute_step(self, db: Session, step: ResearchPlanStep, dossier: EvidenceDossier):
-        """Execute a single research plan step"""
+        """Execute a single research plan step with Deductive Proxy Framework"""
         
         # Get the job ID for tracking
         job_id = dossier.job_id
@@ -353,34 +527,98 @@ Query:"""
         else:
             available_tools = manifest.get("tools", [])
         
-        # Step 1: Tool Selection
+        # Step 1: Check for Direct Data (Deductive Proxy Framework)
+        direct_data_available = self.check_for_direct_data(step.description, available_tools)
+        
+        if not direct_data_available:
+            # Step 1a: Identify Data Gap
+            data_gap = self.identify_data_gap(step.description, available_tools, job_id, dossier.id)
+            step.data_gap_identified = data_gap
+            
+            # Step 1b: Formulate Proxy Hypothesis
+            proxy_hypothesis = self.formulate_proxy_hypothesis(step.description, data_gap, job_id, dossier.id)
+            step.proxy_hypothesis = proxy_hypothesis
+            
+            # Step 1c: Update step description to focus on the proxy
+            proxy_description = f"Find evidence for proxy: {proxy_hypothesis['observable_proxy']}"
+            step.description = f"{step.description} (using proxy: {proxy_hypothesis['observable_proxy']})"
+        
+        # Step 2: Tool Selection
         tool_name = self.select_tool(step.description, available_tools, job_id, dossier.id)
         tool_selection_justification = f"Selected {tool_name} because it is most appropriate for: {step.description}"
         
-        # Step 2: Query Formulation
+        # Step 3: Query Formulation
         query = self.formulate_query(step.description, tool_name, job_id, dossier.id)
         tool_query_rationale = f"Formulated query '{query}' to gather evidence for: {step.description}"
         
-        # Step 3: Execute the search with tracking
+        # Step 4: Execute the search with tracking
         search_results = self.mcp_client.search(query, tool_name, job_id, dossier.id, step.id)
         
-        # Step 4: Update the step with results and justifications
+        # Step 5: Update the step with results and justifications
         step.tool_used = tool_name
         step.tool_selection_justification = tool_selection_justification
         step.tool_query_rationale = tool_query_rationale
         step.status = StepStatus.COMPLETED
         
-        # Step 5: Create evidence items from search results
-        for result in search_results.get("results", []):
+        # Step 6: Create evidence items from search results
+        # Handle different response formats based on tool type
+        if tool_name == "10k-financial-reports":
+            # 10-K response is a single object
+            result = search_results
+            tags = ["10k-report", result.get("section", "financial")]
+            if step.proxy_hypothesis:
+                tags.extend(["proxy-evidence", step.proxy_hypothesis.get("observable_proxy", "proxy")])
+            
             evidence_item = EvidenceItem(
                 id=f"ev-{uuid.uuid4().hex[:8]}",
                 dossier_id=dossier.id,
-                title=result["title"],
+                title=f"{result['company_name']} - {result['title']}",
                 content=result["content"],
-                source=result["source"],
-                confidence=result["confidence"]
+                source=f"10-K Filing ({result['filing_date']}) - Page {result['page']}",
+                confidence=0.95,  # High confidence for official filings
+                tags=tags
             )
             db.add(evidence_item)
+            
+        elif tool_name == "eod-stock-prices":
+            # Stock price response is a single object
+            result = search_results
+            tags = ["stock-price", "financial-data"]
+            if step.proxy_hypothesis:
+                tags.extend(["proxy-evidence", step.proxy_hypothesis.get("observable_proxy", "proxy")])
+            
+            # Format the content to include key financial metrics
+            content = f"Current Price: ${result['current_price']:.2f} | Change: {result['change']:+.2f} ({result['change_percent']:+.2f}%) | Volume: {result['volume']:,} | Market Cap: ${result['market_cap']:,} | P/E Ratio: {result['pe_ratio']:.1f} | Dividend Yield: {result['dividend_yield']:.2f}%"
+            
+            evidence_item = EvidenceItem(
+                id=f"ev-{uuid.uuid4().hex[:8]}",
+                dossier_id=dossier.id,
+                title=f"{result['company_name']} ({result['symbol']}) Stock Price",
+                content=content,
+                source=f"EOD Stock Data - {result['last_updated']}",
+                confidence=0.98,  # Very high confidence for real-time market data
+                tags=tags
+            )
+            db.add(evidence_item)
+            
+        else:
+            # Handle legacy format (array of results)
+            for result in search_results.get("results", []):
+                # Add tags if this is a proxy-based step
+                tags = None
+                if step.proxy_hypothesis:
+                    tags = ["proxy-evidence", step.proxy_hypothesis.get("observable_proxy", "proxy")]
+                
+                evidence_item = EvidenceItem(
+                    id=f"ev-{uuid.uuid4().hex[:8]}",
+                    dossier_id=dossier.id,
+                    title=result["title"],
+                    content=result["content"],
+                    source=result["source"],
+                    confidence=result["confidence"],
+                    tags=tags
+                )
+                db.add(evidence_item)
         
         db.commit()
         
