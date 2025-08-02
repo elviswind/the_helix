@@ -39,6 +39,58 @@ port_in_use() {
     lsof -i :$1 >/dev/null 2>&1
 }
 
+# Function to find process by name and optional port
+find_process() {
+    local process_name=$1
+    local port=${2:-}
+    
+    if [ -n "$port" ]; then
+        # Find process by port
+        lsof -ti :$port 2>/dev/null | head -1
+    else
+        # Find process by name
+        pgrep -f "$process_name" 2>/dev/null | head -1
+    fi
+}
+
+# Function to check if process is running
+is_process_running() {
+    local process_name=$1
+    local port=${2:-}
+    
+    if [ -n "$port" ]; then
+        # Check by port
+        lsof -i :$port >/dev/null 2>&1
+    else
+        # Check by process name
+        pgrep -f "$process_name" >/dev/null 2>&1
+    fi
+}
+
+# Function to kill process by name or port
+kill_process() {
+    local process_name=$1
+    local port=${2:-}
+    local signal=${3:-TERM}
+    
+    if [ -n "$port" ]; then
+        # Kill by port
+        local pid=$(lsof -ti :$port 2>/dev/null | head -1)
+        if [ -n "$pid" ]; then
+            kill -$signal $pid 2>/dev/null || true
+            return 0
+        fi
+    else
+        # Kill by process name
+        local pids=$(pgrep -f "$process_name" 2>/dev/null)
+        if [ -n "$pids" ]; then
+            echo $pids | xargs kill -$signal 2>/dev/null || true
+            return 0
+        fi
+    fi
+    return 1
+}
+
 # Function to wait for a service to be ready
 wait_for_service() {
     local host=$1
@@ -89,11 +141,21 @@ start_celery_worker() {
     print_status "Starting Celery worker..."
     
     if [ -f "run_worker.py" ]; then
-        # Start Celery worker in background
-        python3 run_worker.py &
-        CELERY_PID=$!
-        echo $CELERY_PID > .celery_worker.pid
-        print_success "Celery worker started with PID $CELERY_PID"
+        if ! is_process_running "run_worker.py"; then
+            # Start Celery worker in background
+            python3 run_worker.py &
+            sleep 2  # Give process time to start
+            if is_process_running "run_worker.py"; then
+                local pid=$(find_process "run_worker.py")
+                print_success "Celery worker started with PID $pid"
+            else
+                print_error "Failed to start Celery worker"
+                exit 1
+            fi
+        else
+            local pid=$(find_process "run_worker.py")
+            print_warning "Celery worker is already running with PID $pid"
+        fi
     else
         print_error "run_worker.py not found"
         exit 1
@@ -105,12 +167,26 @@ start_fastapi_server() {
     print_status "Starting FastAPI server..."
     
     if [ -f "main.py" ]; then
-        # Start FastAPI server in background
-        uvicorn main:app --host 0.0.0.0 --port 8000 --reload &
-        FASTAPI_PID=$!
-        echo $FASTAPI_PID > .fastapi_server.pid
-        print_success "FastAPI server started with PID $FASTAPI_PID"
-        print_status "FastAPI server will be available at http://localhost:8000"
+        if ! is_process_running "uvicorn main:app" && ! port_in_use 8000; then
+            # Start FastAPI server in background
+            uvicorn main:app --host 0.0.0.0 --port 8000 --reload &
+            sleep 2  # Give process time to start
+            if port_in_use 8000; then
+                local pid=$(find_process "uvicorn main:app")
+                print_success "FastAPI server started with PID $pid"
+                print_status "FastAPI server will be available at http://localhost:8000"
+            else
+                print_error "Failed to start FastAPI server"
+                exit 1
+            fi
+        else
+            if port_in_use 8000; then
+                local pid=$(find_process "uvicorn main:app")
+                print_warning "FastAPI server is already running with PID $pid on port 8000"
+            else
+                print_warning "FastAPI server process found but port 8000 is not responding"
+            fi
+        fi
     else
         print_error "main.py not found"
         exit 1
@@ -122,12 +198,26 @@ start_mcp_server() {
     print_status "Starting MCP server..."
     
     if [ -f "start_mcp_server.py" ]; then
-        # Start MCP server in background
-        python3 start_mcp_server.py &
-        MCP_PID=$!
-        echo $MCP_PID > .mcp_server.pid
-        print_success "MCP server started with PID $MCP_PID"
-        print_status "MCP server will be available at http://localhost:8001"
+        if ! is_process_running "start_mcp_server.py" && ! port_in_use 8001; then
+            # Start MCP server in background
+            python3 start_mcp_server.py &
+            sleep 2  # Give process time to start
+            if port_in_use 8001; then
+                local pid=$(find_process "start_mcp_server.py")
+                print_success "MCP server started with PID $pid"
+                print_status "MCP server will be available at http://localhost:8001"
+            else
+                print_error "Failed to start MCP server"
+                exit 1
+            fi
+        else
+            if port_in_use 8001; then
+                local pid=$(find_process "start_mcp_server.py")
+                print_warning "MCP server is already running with PID $pid on port 8001"
+            else
+                print_warning "MCP server process found but port 8001 is not responding"
+            fi
+        fi
     else
         print_error "start_mcp_server.py not found"
         exit 1
@@ -182,33 +272,36 @@ stop_services() {
     print_status "Stopping all services..."
     
     # Stop Celery worker
-    if [ -f ".celery_worker.pid" ]; then
-        CELERY_PID=$(cat .celery_worker.pid)
-        if kill -0 $CELERY_PID 2>/dev/null; then
-            kill $CELERY_PID
+    if is_process_running "run_worker.py"; then
+        if kill_process "run_worker.py"; then
             print_success "Celery worker stopped"
+        else
+            print_warning "Failed to stop Celery worker"
         fi
-        rm -f .celery_worker.pid
+    else
+        print_warning "Celery worker is not running"
     fi
     
     # Stop FastAPI server
-    if [ -f ".fastapi_server.pid" ]; then
-        FASTAPI_PID=$(cat .fastapi_server.pid)
-        if kill -0 $FASTAPI_PID 2>/dev/null; then
-            kill $FASTAPI_PID
+    if is_process_running "uvicorn main:app" || port_in_use 8000; then
+        if kill_process "uvicorn main:app" || kill_process "" 8000; then
             print_success "FastAPI server stopped"
+        else
+            print_warning "Failed to stop FastAPI server"
         fi
-        rm -f .fastapi_server.pid
+    else
+        print_warning "FastAPI server is not running"
     fi
     
     # Stop MCP server
-    if [ -f ".mcp_server.pid" ]; then
-        MCP_PID=$(cat .mcp_server.pid)
-        if kill -0 $MCP_PID 2>/dev/null; then
-            kill $MCP_PID
+    if is_process_running "start_mcp_server.py" || port_in_use 8001; then
+        if kill_process "start_mcp_server.py" || kill_process "" 8001; then
             print_success "MCP server stopped"
+        else
+            print_warning "Failed to stop MCP server"
         fi
-        rm -f .mcp_server.pid
+    else
+        print_warning "MCP server is not running"
     fi
     
     # Stop Redis (if started by this script)
@@ -225,33 +318,32 @@ show_status() {
     
     # Check Redis
     if port_in_use 6379; then
-        echo -e "${GREEN}✓${NC} Redis (port 6379) - Running"
+        local redis_pid=$(find_process "" 6379)
+        echo -e "${GREEN}✓${NC} Redis (port 6379, PID $redis_pid) - Running"
     else
         echo -e "${RED}✗${NC} Redis (port 6379) - Not running"
     fi
     
     # Check FastAPI server
     if port_in_use 8000; then
-        echo -e "${GREEN}✓${NC} FastAPI Server (port 8000) - Running"
+        local fastapi_pid=$(find_process "uvicorn main:app")
+        echo -e "${GREEN}✓${NC} FastAPI Server (port 8000, PID $fastapi_pid) - Running"
     else
         echo -e "${RED}✗${NC} FastAPI Server (port 8000) - Not running"
     fi
     
     # Check MCP server
     if port_in_use 8001; then
-        echo -e "${GREEN}✓${NC} MCP Server (port 8001) - Running"
+        local mcp_pid=$(find_process "start_mcp_server.py")
+        echo -e "${GREEN}✓${NC} MCP Server (port 8001, PID $mcp_pid) - Running"
     else
         echo -e "${RED}✗${NC} MCP Server (port 8001) - Not running"
     fi
     
     # Check Celery worker
-    if [ -f ".celery_worker.pid" ]; then
-        CELERY_PID=$(cat .celery_worker.pid)
-        if kill -0 $CELERY_PID 2>/dev/null; then
-            echo -e "${GREEN}✓${NC} Celery Worker (PID $CELERY_PID) - Running"
-        else
-            echo -e "${RED}✗${NC} Celery Worker - Not running (stale PID file)"
-        fi
+    if is_process_running "run_worker.py"; then
+        local celery_pid=$(find_process "run_worker.py")
+        echo -e "${GREEN}✓${NC} Celery Worker (PID $celery_pid) - Running"
     else
         echo -e "${RED}✗${NC} Celery Worker - Not running"
     fi

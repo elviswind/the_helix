@@ -170,6 +170,19 @@ class ToolRequest(Base):
     dossier = relationship("EvidenceDossier")
     step = relationship("ResearchPlanStep")
 
+# New model for Checkpoint 6 - Revision Feedback
+class RevisionFeedback(Base):
+    __tablename__ = "revision_feedback"
+    
+    id = Column(String, primary_key=True)
+    dossier_id = Column(String, ForeignKey("evidence_dossiers.id"), nullable=False)
+    feedback = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    processed_at = Column(DateTime, nullable=True)
+    
+    # Relationships
+    dossier = relationship("EvidenceDossier")
+
 # Database setup
 DATABASE_URL = "sqlite:///./ar_system.db"
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})

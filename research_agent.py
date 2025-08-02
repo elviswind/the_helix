@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from models import (
     EvidenceDossier, ResearchPlan, ResearchPlanStep, EvidenceItem,
     DossierStatus, StepStatus, SessionLocal, LLMRequest, LLMRequestStatus, LLMRequestType,
-    ToolRequest, ToolRequestStatus, ToolRequestType, JobStatus, Job
+    ToolRequest, ToolRequestStatus, ToolRequestType, JobStatus, Job, RevisionFeedback
 )
 from celery_app import celery_app
 from datetime import datetime
@@ -669,6 +669,35 @@ Query:"""
         
         return search_results
     
+    def process_revision_feedback(self, db: Session, dossier: EvidenceDossier, revision_feedback: RevisionFeedback):
+        """Process revision feedback and update the research plan accordingly"""
+        
+        # Mark feedback as processed
+        revision_feedback.processed_at = datetime.utcnow()
+        db.commit()
+        
+        # Get the research plan
+        research_plan = db.query(ResearchPlan).filter(ResearchPlan.dossier_id == dossier.id).first()
+        if not research_plan:
+            return
+        
+        # Create a new step based on the feedback
+        feedback_step = ResearchPlanStep(
+            id=f"step-{uuid.uuid4().hex[:8]}",
+            research_plan_id=research_plan.id,
+            step_number=999,  # High number to ensure it's last
+            description=f"Address revision feedback: {revision_feedback.feedback}",
+            status=StepStatus.PENDING
+        )
+        db.add(feedback_step)
+        db.commit()
+        
+        # Clear existing evidence items to start fresh
+        existing_evidence = db.query(EvidenceItem).filter(EvidenceItem.dossier_id == dossier.id).all()
+        for evidence in existing_evidence:
+            db.delete(evidence)
+        db.commit()
+
     def execute_research_plan(self, db: Session, dossier_id: str):
         """Execute the complete research plan for a dossier"""
         
@@ -676,6 +705,16 @@ Query:"""
         dossier = db.query(EvidenceDossier).filter(EvidenceDossier.id == dossier_id).first()
         if not dossier:
             raise ValueError(f"Dossier {dossier_id} not found")
+        
+        # Check for revision feedback
+        revision_feedback = db.query(RevisionFeedback).filter(
+            RevisionFeedback.dossier_id == dossier_id,
+            RevisionFeedback.processed_at.is_(None)
+        ).first()
+        
+        if revision_feedback:
+            # Process revision feedback
+            self.process_revision_feedback(db, dossier, revision_feedback)
         
         # Update dossier status
         dossier.status = DossierStatus.RESEARCHING

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 import threading
 from celery.result import AsyncResult
 
-from models import get_db, create_tables, Job, EvidenceDossier, ResearchPlan, ResearchPlanStep, EvidenceItem, SessionLocal, LLMRequest, LLMRequestStatus, LLMRequestType, ToolRequest, ToolRequestStatus, ToolRequestType
+from models import get_db, create_tables, Job, EvidenceDossier, ResearchPlan, ResearchPlanStep, EvidenceItem, SessionLocal, LLMRequest, LLMRequestStatus, LLMRequestType, ToolRequest, ToolRequestStatus, ToolRequestType, DossierStatus, JobStatus, RevisionFeedback
 from services import CannedResearchService
 from orchestrator_agent import orchestrator_task
 
@@ -76,6 +76,22 @@ class DossierResponse(BaseModel):
     research_plan: ResearchPlanResponse
     evidence_items: List[EvidenceItemResponse]
     summary_of_findings: str
+
+# New models for Checkpoint 6 - Human Adjudicator
+class DossierReviewRequest(BaseModel):
+    action: str  # "APPROVE" or "REVISE"
+    feedback: str | None = None  # Required for REVISE action
+
+class DossierReviewResponse(BaseModel):
+    success: bool
+    message: str
+    job_status: str | None = None
+
+class VerificationChecklist(BaseModel):
+    review_summary: bool = False
+    validate_proxy_logic: bool = False
+    spot_check_evidence: bool = False
+    audit_reasoning: bool = False
 
 class LLMRequestResponse(BaseModel):
     id: str
@@ -346,7 +362,119 @@ async def get_recent_jobs(db: Session = Depends(get_db)):
         for job in jobs
     ]
 
+# Checkpoint 6 - Human Adjudicator API Endpoints
 
+@app.post("/v3/dossiers/{dossier_id}/review", response_model=DossierReviewResponse)
+async def review_dossier(dossier_id: str, review_request: DossierReviewRequest, db: Session = Depends(get_db)):
+    """Review and approve or request revision for a dossier"""
+    
+    # Verify dossier exists
+    dossier = db.query(EvidenceDossier).filter(EvidenceDossier.id == dossier_id).first()
+    if not dossier:
+        raise HTTPException(status_code=404, detail="Dossier not found")
+    
+    # Verify dossier is in correct status
+    if dossier.status != DossierStatus.AWAITING_VERIFICATION:
+        raise HTTPException(status_code=400, detail=f"Dossier is in {dossier.status.value} status, cannot be reviewed")
+    
+    if review_request.action == "APPROVE":
+        # Approve the dossier
+        dossier.status = DossierStatus.APPROVED
+        db.commit()
+        
+        # Check if both dossiers are now approved
+        job = dossier.job
+        thesis_dossier = db.query(EvidenceDossier).filter(
+            EvidenceDossier.job_id == job.id,
+            EvidenceDossier.dossier_type == "THESIS"
+        ).first()
+        antithesis_dossier = db.query(EvidenceDossier).filter(
+            EvidenceDossier.job_id == job.id,
+            EvidenceDossier.dossier_type == "ANTITHESIS"
+        ).first()
+        
+        if thesis_dossier.status == DossierStatus.APPROVED and antithesis_dossier.status == DossierStatus.APPROVED:
+            # Both dossiers approved - trigger synthesis
+            job.status = JobStatus.COMPLETE
+            db.commit()
+            # TODO: Trigger synthesis agent task here
+            return DossierReviewResponse(
+                success=True,
+                message="Dossier approved. Both dossiers approved - synthesis will begin.",
+                job_status="COMPLETE"
+            )
+        else:
+            return DossierReviewResponse(
+                success=True,
+                message="Dossier approved. Awaiting approval of other dossier.",
+                job_status="AWAITING_VERIFICATION"
+            )
+    
+    elif review_request.action == "REVISE":
+        if not review_request.feedback:
+            raise HTTPException(status_code=400, detail="Feedback is required for revision requests")
+        
+        # Store revision feedback
+        revision_feedback = RevisionFeedback(
+            id=f"rev-{uuid.uuid4().hex[:8]}",
+            dossier_id=dossier_id,
+            feedback=review_request.feedback
+        )
+        db.add(revision_feedback)
+        
+        # Request revision
+        dossier.status = DossierStatus.REVISION_REQUESTED
+        db.commit()
+        
+        # Re-enqueue research agent task
+        from research_agent import research_agent_task
+        research_agent_task.delay(dossier_id)
+        
+        return DossierReviewResponse(
+            success=True,
+            message="Revision requested. Research agent will be re-enqueued with feedback.",
+            job_status="REVISING"
+        )
+    
+    else:
+        raise HTTPException(status_code=400, detail="Invalid action. Must be 'APPROVE' or 'REVISE'")
+
+@app.get("/v3/jobs/{job_id}/verification-status")
+async def get_verification_status(job_id: str, db: Session = Depends(get_db)):
+    """Get the verification status for both dossiers in a job"""
+    
+    # Verify job exists
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Get both dossiers
+    thesis_dossier = db.query(EvidenceDossier).filter(
+        EvidenceDossier.job_id == job_id,
+        EvidenceDossier.dossier_type == "THESIS"
+    ).first()
+    antithesis_dossier = db.query(EvidenceDossier).filter(
+        EvidenceDossier.job_id == job_id,
+        EvidenceDossier.dossier_type == "ANTITHESIS"
+    ).first()
+    
+    if not thesis_dossier or not antithesis_dossier:
+        raise HTTPException(status_code=404, detail="Dossiers not found")
+    
+    return {
+        "job_id": job_id,
+        "job_status": job.status.value,
+        "thesis_dossier": {
+            "id": thesis_dossier.id,
+            "status": thesis_dossier.status.value,
+            "mission": thesis_dossier.mission
+        },
+        "antithesis_dossier": {
+            "id": antithesis_dossier.id,
+            "status": antithesis_dossier.status.value,
+            "mission": antithesis_dossier.mission
+        }
+    }
 
 if __name__ == "__main__":
     import uvicorn
