@@ -10,9 +10,10 @@ from sqlalchemy.orm import Session
 import threading
 from celery.result import AsyncResult
 
-from models import get_db, create_tables, Job, EvidenceDossier, ResearchPlan, ResearchPlanStep, EvidenceItem, SessionLocal, LLMRequest, LLMRequestStatus, LLMRequestType, ToolRequest, ToolRequestStatus, ToolRequestType, DossierStatus, JobStatus, RevisionFeedback
+from models import get_db, create_tables, Job, EvidenceDossier, ResearchPlan, ResearchPlanStep, EvidenceItem, SessionLocal, LLMRequest, LLMRequestStatus, LLMRequestType, ToolRequest, ToolRequestStatus, ToolRequestType, DossierStatus, JobStatus, RevisionFeedback, SynthesisReport
 from services import CannedResearchService
 from orchestrator_agent import orchestrator_task
+from synthesis_agent import synthesis_agent_task
 
 app = FastAPI(title="Agentic Retrieval System v3.0", version="3.0.0")
 
@@ -397,7 +398,10 @@ async def review_dossier(dossier_id: str, review_request: DossierReviewRequest, 
             # Both dossiers approved - trigger synthesis
             job.status = JobStatus.COMPLETE
             db.commit()
-            # TODO: Trigger synthesis agent task here
+            
+            # Trigger synthesis agent task
+            synthesis_agent_task.delay(job.id)
+            
             return DossierReviewResponse(
                 success=True,
                 message="Dossier approved. Both dossiers approved - synthesis will begin.",
@@ -474,6 +478,31 @@ async def get_verification_status(job_id: str, db: Session = Depends(get_db)):
             "status": antithesis_dossier.status.value,
             "mission": antithesis_dossier.mission
         }
+    }
+
+@app.get("/v3/jobs/{job_id}/report")
+async def get_final_report(job_id: str, db: Session = Depends(get_db)):
+    """Get the final synthesis report for a completed job"""
+    
+    # Verify job exists and is complete
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    if job.status != JobStatus.COMPLETE:
+        raise HTTPException(status_code=400, detail="Job is not complete. Synthesis report not available yet.")
+    
+    # Get the synthesis report
+    synthesis_report = db.query(SynthesisReport).filter(SynthesisReport.job_id == job_id).first()
+    if not synthesis_report:
+        raise HTTPException(status_code=404, detail="Synthesis report not found")
+    
+    return {
+        "job_id": job_id,
+        "original_query": job.query,
+        "report_id": synthesis_report.id,
+        "content": synthesis_report.content,
+        "created_at": synthesis_report.created_at.isoformat()
     }
 
 if __name__ == "__main__":

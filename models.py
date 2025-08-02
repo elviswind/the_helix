@@ -183,6 +183,18 @@ class RevisionFeedback(Base):
     # Relationships
     dossier = relationship("EvidenceDossier")
 
+# New model for Checkpoint 7 - Synthesis Report
+class SynthesisReport(Base):
+    __tablename__ = "synthesis_reports"
+    
+    id = Column(String, primary_key=True)
+    job_id = Column(String, ForeignKey("jobs.id"), nullable=False)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    job = relationship("Job")
+
 # Database setup
 DATABASE_URL = "sqlite:///./ar_system.db"
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})

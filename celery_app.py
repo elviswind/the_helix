@@ -10,7 +10,7 @@ celery_app = Celery(
     'ar_system',
     broker=CELERY_BROKER_URL,
     backend=CELERY_RESULT_BACKEND,
-    include=['orchestrator_agent', 'research_agent']
+    include=['orchestrator_agent', 'research_agent', 'synthesis_agent']
 )
 
 # Celery configuration
