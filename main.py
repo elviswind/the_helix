@@ -39,6 +39,7 @@ class JobResponse(BaseModel):
 
 class JobStatus(BaseModel):
     status: str
+    original_query: str | None = None
     thesis_dossier_id: str | None = None
     antithesis_dossier_id: str | None = None
     task_status: str | None = None
@@ -171,6 +172,7 @@ async def get_job_status(job_id: str, db: Session = Depends(get_db)):
     
     return JobStatus(
         status=job.status.value,
+        original_query=job.query,
         thesis_dossier_id=thesis_dossier_id,
         antithesis_dossier_id=antithesis_dossier_id,
         task_status=task_status,
@@ -343,6 +345,8 @@ async def get_recent_jobs(db: Session = Depends(get_db)):
         }
         for job in jobs
     ]
+
+
 
 if __name__ == "__main__":
     import uvicorn

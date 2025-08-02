@@ -67,7 +67,7 @@
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
             display: flex;
             justify-content: space-between;
-            align-items: center;
+            align-items: flex-start;
         }
 
         .status {
@@ -462,7 +462,10 @@
                 <div class="status-indicator"></div>
                 <span id="statusText">Researching...</span>
             </div>
-            <div id="jobId"></div>
+            <div style="text-align: right;">
+                <div id="jobId"></div>
+                <div id="originalQuery" style="margin-top: 5px; font-size: 0.9rem; color: #666; max-width: 400px; text-align: right;"></div>
+            </div>
         </div>
 
         <div class="llm-requests-panel">
@@ -686,6 +689,11 @@
                 }
 
                 const status = await response.json();
+                
+                // Display original query
+                if (status.original_query) {
+                    document.getElementById('originalQuery').textContent = `Query: "${status.original_query}"`;
+                }
                 
                 if (status.status === 'RESEARCHING') {
                     document.getElementById('statusText').textContent = 'Researching...';

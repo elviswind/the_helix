@@ -264,9 +264,20 @@ class TrackingLLMClient:
     def _mock_response(self, prompt: str) -> str:
         """Mock response for development when LLM is not available"""
         if "tool selection" in prompt.lower():
-            return "market-data-api"
+            # Return a valid tool name that actually exists
+            if "10k" in prompt.lower() or "financial" in prompt.lower():
+                return "10k-financial-reports"
+            elif "stock" in prompt.lower() or "price" in prompt.lower():
+                return "eod-stock-prices"
+            else:
+                return "10k-financial-reports"  # Default to most useful tool
         elif "query formulation" in prompt.lower():
-            return "growth trends and market indicators"
+            if "10k-financial-reports" in prompt.lower():
+                return "ticker:AAPL section:business_overview"
+            elif "eod-stock-prices" in prompt.lower():
+                return "ticker:AAPL"
+            else:
+                return "ticker:AAPL section:business_overview"
         else:
             return "Mock response for development"
 
@@ -421,7 +432,7 @@ Proxy hypothesis:"""
             }
     
     def select_tool(self, step_description: str, available_tools: list, job_id: str, dossier_id: str) -> str:
-        """Use LLM to select the best tool for a research step"""
+        """Use LLM to select the best tool for a research step with improved fallback logic"""
         
         # Create a prompt for tool selection
         tools_text = "\n".join([f"- {tool['name']}: {tool['description']}" for tool in available_tools])
@@ -434,27 +445,61 @@ Available tools:
 Research step: {step_description}
 
 Based on the research step description, select the most appropriate tool from the list above. 
-Respond with ONLY the tool name (e.g., "market-data-api").
+Respond with ONLY the tool name (e.g., "10k-financial-reports").
 
 Selected tool:"""
         
-        response = self.llm_client.generate(
-            prompt=prompt,
-            job_id=job_id,
-            request_type=LLMRequestType.TOOL_SELECTION,
-            dossier_id=dossier_id
-        )
+        try:
+            response = self.llm_client.generate(
+                prompt=prompt,
+                job_id=job_id,
+                request_type=LLMRequestType.TOOL_SELECTION,
+                dossier_id=dossier_id
+            )
+            
+            # Extract tool name from response
+            tool_name = response.strip().split('\n')[0].strip()
+            
+            # Validate that the tool exists
+            available_tool_names = [tool['name'] for tool in available_tools]
+            if tool_name not in available_tool_names:
+                # Use intelligent fallback based on step content
+                tool_name = self._intelligent_tool_fallback(step_description, available_tool_names)
+                print(f"Warning: LLM selected invalid tool '{response.strip()}', falling back to '{tool_name}'")
+            
+            return tool_name
+            
+        except Exception as e:
+            print(f"Error in tool selection for step '{step_description}': {e}")
+            # Use intelligent fallback
+            available_tool_names = [tool['name'] for tool in available_tools]
+            return self._intelligent_tool_fallback(step_description, available_tool_names)
+    
+    def _intelligent_tool_fallback(self, step_description: str, available_tool_names: list) -> str:
+        """Intelligent fallback for tool selection based on step content"""
+        step_lower = step_description.lower()
         
-        # Extract tool name from response
-        tool_name = response.strip().split('\n')[0].strip()
+        # Check for financial/10-K related keywords
+        financial_keywords = ['financial', 'earnings', 'revenue', 'profit', '10-k', '10k', 'quarterly', 'annual', 'sec', 'filing']
+        if any(keyword in step_lower for keyword in financial_keywords):
+            if '10k-financial-reports' in available_tool_names:
+                return '10k-financial-reports'
         
-        # Validate that the tool exists
-        available_tool_names = [tool['name'] for tool in available_tools]
-        if tool_name not in available_tool_names:
-            # Fallback to first available tool
-            tool_name = available_tool_names[0] if available_tool_names else "market-data-api"
+        # Check for stock/market related keywords
+        stock_keywords = ['stock', 'price', 'market', 'trading', 'valuation', 'share', 'market cap', 'pe ratio']
+        if any(keyword in step_lower for keyword in stock_keywords):
+            if 'eod-stock-prices' in available_tool_names:
+                return 'eod-stock-prices'
         
-        return tool_name
+        # Default fallback - prefer 10k-financial-reports for business analysis
+        if '10k-financial-reports' in available_tool_names:
+            return '10k-financial-reports'
+        elif 'eod-stock-prices' in available_tool_names:
+            return 'eod-stock-prices'
+        elif available_tool_names:
+            return available_tool_names[0]
+        else:
+            return '10k-financial-reports'  # Ultimate fallback
     
     def formulate_query(self, step_description: str, tool_name: str, job_id: str, dossier_id: str) -> str:
         """Use LLM to formulate a query for the selected tool"""
