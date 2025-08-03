@@ -305,31 +305,12 @@ class TrackingLLMClient:
                 db.commit()
                 
                 print(f"LLM API error: {e}")
-                # Fallback to mock response for development
-                return self._mock_response(prompt)
+                raise e
                 
         finally:
             db.close()
     
-    def _mock_response(self, prompt: str) -> str:
-        """Mock response for development when LLM is not available"""
-        if "tool selection" in prompt.lower():
-            # Return a valid tool name that actually exists
-            if "10k" in prompt.lower() or "financial" in prompt.lower():
-                return "10k-financial-reports"
-            elif "stock" in prompt.lower() or "price" in prompt.lower():
-                return "eod-stock-prices"
-            else:
-                return "10k-financial-reports"  # Default to most useful tool
-        elif "query formulation" in prompt.lower():
-            if "10k-financial-reports" in prompt.lower():
-                return "ticker:AAPL section:business_overview"
-            elif "eod-stock-prices" in prompt.lower():
-                return "ticker:AAPL"
-            else:
-                return "ticker:AAPL section:business_overview"
-        else:
-            return "Mock response for development"
+
 
 class LLMClient:
     """Legacy client for backward compatibility"""
@@ -356,16 +337,9 @@ class LLMClient:
             return response.json()["response"]
         except Exception as e:
             print(f"LLM API error: {e}")
-            return self._mock_response(prompt)
+            raise e
     
-    def _mock_response(self, prompt: str) -> str:
-        """Mock response for development when LLM is not available"""
-        if "tool selection" in prompt.lower():
-            return "market-data-api"
-        elif "query formulation" in prompt.lower():
-            return "growth trends and market indicators"
-        else:
-            return "Mock response for development"
+
 
 class ResearchAgent:
     """Research Agent that executes research plans using LLM and MCP tools"""
@@ -702,19 +676,45 @@ Query:"""
             if step.proxy_hypothesis:
                 tags.extend(["proxy-evidence", step.proxy_hypothesis.get("observable_proxy", "proxy")])
             
-            # Format the content to include the financial fact
-            content = f"{result['concept']}: ${result['value']:,} ({result['unit']}) for {result['year']}"
-            
-            evidence_item = EvidenceItem(
-                id=f"ev-{uuid.uuid4().hex[:8]}",
-                dossier_id=dossier.id,
-                title=f"{result['symbol']} - {result['concept']} ({result['year']})",
-                content=content,
-                source=f"XBRL Filing {result['year']}",
-                confidence=0.98,  # Very high confidence for official financial data
-                tags=tags
-            )
-            db.add(evidence_item)
+            # Check if there's an error in the XBRL result
+            if "error" in result and result["error"]:
+                # Handle XBRL error case
+                content = f"XBRL data not available: {result['error']}"
+                # Safely get fields with defaults
+                symbol = result.get('symbol', 'Unknown')
+                concept = result.get('concept', 'Unknown')
+                year = result.get('year', 'Unknown')
+                evidence_item = EvidenceItem(
+                    id=f"ev-{uuid.uuid4().hex[:8]}",
+                    dossier_id=dossier.id,
+                    title=f"{symbol} - {concept} ({year}) - Data Unavailable",
+                    content=content,
+                    source=f"XBRL Filing {year} (Not Implemented)",
+                    confidence=0.0,  # No confidence when data is unavailable
+                    tags=tags
+                )
+                db.add(evidence_item)
+            else:
+                # Handle successful XBRL result
+                # Safely get fields with defaults
+                symbol = result.get('symbol', 'Unknown')
+                concept = result.get('concept', 'Unknown')
+                year = result.get('year', 'Unknown')
+                value = result.get('value', 0)
+                unit = result.get('unit', 'USD')
+                
+                content = f"{concept}: ${value:,} ({unit}) for {year}"
+                
+                evidence_item = EvidenceItem(
+                    id=f"ev-{uuid.uuid4().hex[:8]}",
+                    dossier_id=dossier.id,
+                    title=f"{symbol} - {concept} ({year})",
+                    content=content,
+                    source=f"XBRL Filing {year}",
+                    confidence=0.98,  # Very high confidence for official financial data
+                    tags=tags
+                )
+                db.add(evidence_item)
             
         else:
             # Handle legacy format (array of results)

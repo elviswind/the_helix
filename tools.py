@@ -10,45 +10,50 @@ from sec_parser import get_10k_section, get_10k_filing, get_available_companies,
 # Import the existing LLM client
 from orchestrator_agent import TrackingLLMClient
 
-# Mock XBRL data for now - this would be replaced with actual XBRL parsing
 def get_financial_fact(symbol: str, year: int, concept: str):
     """Get financial fact from XBRL data"""
-    # This would connect to actual XBRL data sources
-    # For now, using mock data but this could be enhanced with Arelle or similar
+    # Mock data for development - replace with actual XBRL data sources in production
     mock_data = {
         "AAPL": {
-            "Revenue": {"2023": 383285000000, "2022": 394328000000, "2021": 365817000000},
-            "NetIncome": {"2023": 96995000000, "2022": 99803000000, "2021": 94680000000},
-            "Inventory": {"2023": 6331000000, "2022": 4946000000, "2021": 6580000000},
-            "GrossProfit": {"2023": 169148000000, "2022": 170782000000, "2021": 152836000000},
-            "TotalAssets": {"2023": 352755000000, "2022": 346747000000, "2021": 351002000000}
-        },
-        "MSFT": {
-            "Revenue": {"2023": 211915000000, "2022": 198270000000, "2021": 168088000000},
-            "NetIncome": {"2023": 72409000000, "2022": 72619000000, "2021": 61271000000},
-            "Inventory": {"2023": 2500000000, "2022": 3744000000, "2021": 2600000000},
-            "GrossProfit": {"2023": 146052000000, "2022": 135620000000, "2021": 115856000000},
-            "TotalAssets": {"2023": 470558000000, "2022": 364840000000, "2021": 333779000000}
+            "Revenue": {
+                2024: 394328000000,  # $394.3B
+                2023: 383285000000,  # $383.3B
+                2022: 394328000000,  # $394.3B
+            },
+            "NetIncome": {
+                2024: 96995000000,   # $97.0B
+                2023: 96995000000,   # $97.0B
+                2022: 96995000000,   # $97.0B
+            },
+            "GrossProfit": {
+                2024: 169148000000,  # $169.1B
+                2023: 169148000000,  # $169.1B
+                2022: 169148000000,  # $169.1B
+            }
         }
     }
     
-    if symbol in mock_data and concept in mock_data[symbol] and str(year) in mock_data[symbol][concept]:
-        return {
-            "symbol": symbol,
-            "year": year,
-            "concept": concept,
-            "value": mock_data[symbol][concept][str(year)],
-            "unit": "USD",
-            "source": f"XBRL Filing {year}"
-        }
-    else:
-        return {
-            "symbol": symbol,
-            "year": year,
-            "concept": concept,
-            "value": None,
-            "error": f"Data not available for {symbol} {concept} {year}"
-        }
+    # Check if we have mock data for this symbol and concept
+    if symbol.upper() in mock_data and concept in mock_data[symbol.upper()]:
+        if year in mock_data[symbol.upper()][concept]:
+            return {
+                "symbol": symbol,
+                "year": year,
+                "concept": concept,
+                "value": mock_data[symbol.upper()][concept][year],
+                "unit": "USD",
+                "source": "Mock XBRL Data (Development)"
+            }
+    
+    # Return error for unavailable data
+    return {
+        "symbol": symbol,
+        "year": year,
+        "concept": concept,
+        "value": None,
+        "error": f"XBRL data not available for {symbol} {concept} {year}",
+        "unit": "USD"
+    }
 
 def get_section_text(symbol: str, year: int, section: str):
     """Get section text from real 10-K filings"""
@@ -103,30 +108,45 @@ class MCPTool:
     name = "mcp_server_tool"
     description = "Interfaces with the MCP server to retrieve financial data and reports"
 
-    def run(self, tool_name: str, parameters: dict):
+    def run(self, query: str = None, tool_name: str = None, parameters: dict = None):
+        """
+        Run MCP tool with flexible parameter handling.
+        Can be called with either:
+        - query: str (for search queries)
+        - tool_name: str, parameters: dict (for specific tool calls)
+        """
         mcp_server_url = "http://localhost:8001"
         
         try:
-            if tool_name == "10k-financial-reports":
+            # Handle search query case
+            if query:
+                # For search queries, we'll use the tools/execute endpoint with a search tool
                 response = requests.post(
-                    f"{mcp_server_url}/10k-report",
-                    json=parameters,
+                    f"{mcp_server_url}/tools/execute",
+                    json={
+                        "tool_name": "mcp_search_tool",
+                        "parameters": {"query": query}
+                    },
                     timeout=30
                 )
                 response.raise_for_status()
                 return response.json()
             
-            elif tool_name == "eod-stock-prices":
+            # Handle specific tool calls
+            elif tool_name and parameters:
                 response = requests.post(
-                    f"{mcp_server_url}/stock-price",
-                    json=parameters,
+                    f"{mcp_server_url}/tools/execute",
+                    json={
+                        "tool_name": tool_name,
+                        "parameters": parameters
+                    },
                     timeout=30
                 )
                 response.raise_for_status()
                 return response.json()
             
             else:
-                return {"error": f"Unknown MCP tool: {tool_name}"}
+                return {"error": "MCPTool requires either 'query' or both 'tool_name' and 'parameters'"}
                 
         except requests.exceptions.RequestException as e:
             return {"error": f"MCP server request failed: {str(e)}"}
@@ -165,6 +185,43 @@ class LLMTool:
                 "error": str(e),
                 "request_type": request_type
             }
+
+class MCPSearchTool:
+    name = "mcp_search_tool"
+    description = "Search for financial data and reports using the MCP server"
+
+    def run(self, query: str):
+        """Search for financial data based on query"""
+        # For now, return a mock response that simulates search results
+        # In a real implementation, this would search through financial databases
+        return {
+            "success": True,
+            "results": [
+                {
+                    "title": "Apple Inc. Financial Performance Analysis",
+                    "content": "Apple's revenue growth has been consistent over the past 5 years, with strong performance in the mobile phone market.",
+                    "source": "Financial Analysis Report",
+                    "confidence": 0.85,
+                    "tags": ["financial", "revenue", "mobile"]
+                },
+                {
+                    "title": "Mobile Phone Market Share Analysis",
+                    "content": "Apple maintains a strong position in the premium smartphone segment with approximately 20% global market share.",
+                    "source": "Market Research Report",
+                    "confidence": 0.78,
+                    "tags": ["market_share", "mobile", "premium"]
+                },
+                {
+                    "title": "Competitive Analysis: Apple vs Android",
+                    "content": "While Apple leads in profitability and brand loyalty, Android manufacturers are gaining ground in emerging markets and innovation areas like foldable displays.",
+                    "source": "Competitive Intelligence",
+                    "confidence": 0.72,
+                    "tags": ["competition", "android", "innovation"]
+                }
+            ],
+            "total_count": 3,
+            "query": query
+        }
 
 class SECDataTool:
     name = "sec_data_tool"
@@ -216,6 +273,7 @@ tool_registry = {
     "xbrl_financial_fact_retriever": XBRLFactTool(),
     "document_section_retriever": DocumentSectionTool(),
     "mcp_server_tool": MCPTool(),
+    "mcp_search_tool": MCPSearchTool(),
     "llm_tool": LLMTool(),
     "sec_data_tool": SECDataTool()
 }

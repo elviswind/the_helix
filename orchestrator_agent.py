@@ -73,69 +73,12 @@ class TrackingLLMClient:
                 db.commit()
                 
                 print(f"LLM API error: {e}")
-                # Fallback to mock response for development
-                return self._mock_response(prompt)
+                raise e
                 
         finally:
             db.close()
     
-    def _mock_response(self, prompt: str) -> str:
-        """Mock response for development when LLM is not available"""
-        if "thesis" in prompt.lower() and "antithesis" in prompt.lower():
-            return """
-{
-  "thesis_mission": "Build the strongest possible case FOR the investment opportunity by analyzing positive market indicators, growth potential, competitive advantages, and favorable expert opinions.",
-  "antithesis_mission": "Build the strongest possible case AGAINST the investment opportunity by examining market risks, competitive threats, financial concerns, and bearish expert opinions.",
-  "thesis_plan": [
-    {
-      "step_number": 1,
-      "description": "Analyze positive market indicators and growth trends",
-      "tool_used": "market-data-api",
-      "tool_selection_justification": "Market data is essential for understanding positive trends and growth potential",
-      "tool_query_rationale": "Focusing on growth metrics, positive sentiment indicators, and upward trends"
-    },
-    {
-      "step_number": 2,
-      "description": "Review favorable expert opinions and analyst reports",
-      "tool_used": "expert-analysis-db",
-      "tool_selection_justification": "Expert opinions provide credibility and validation to the thesis",
-      "tool_query_rationale": "Searching for bullish analyst reports, positive forecasts, and expert endorsements"
-    },
-    {
-      "step_number": 3,
-      "description": "Examine competitive advantages and market position",
-      "tool_used": "competitive-analysis-api",
-      "tool_selection_justification": "Understanding competitive position is crucial for long-term success",
-      "tool_query_rationale": "Analyzing market share, competitive moats, and strategic advantages"
-    }
-  ],
-  "antithesis_plan": [
-    {
-      "step_number": 1,
-      "description": "Identify market risks and potential challenges",
-      "tool_used": "risk-assessment-api",
-      "tool_selection_justification": "Risk analysis is crucial for understanding potential downsides and vulnerabilities",
-      "tool_query_rationale": "Focusing on volatility indicators, negative market signals, and potential disruption factors"
-    },
-    {
-      "step_number": 2,
-      "description": "Review bearish expert opinions and cautionary reports",
-      "tool_used": "expert-analysis-db",
-      "tool_selection_justification": "Contrary expert opinions provide balance and highlight potential blind spots",
-      "tool_query_rationale": "Searching for bearish analyst reports, risk warnings, and skeptical viewpoints"
-    },
-    {
-      "step_number": 3,
-      "description": "Analyze competitive threats and market disruption risks",
-      "tool_used": "competitive-analysis-api",
-      "tool_selection_justification": "Understanding competitive threats is essential for risk assessment",
-      "tool_query_rationale": "Analyzing emerging competitors, disruptive technologies, and market share erosion risks"
-    }
-  ]
-}
-"""
-        else:
-            return "Mock response for development"
+
 
 class LLMClient:
     """Legacy client for backward compatibility"""
@@ -165,66 +108,9 @@ class LLMClient:
             return response.json()["response"]
         except Exception as e:
             print(f"LLM API error: {e}")
-            # Fallback to mock response for development
-            return self._mock_response(prompt)
+            raise e
     
-    def _mock_response(self, prompt: str) -> str:
-        """Mock response for development when LLM is not available"""
-        if "thesis" in prompt.lower() and "antithesis" in prompt.lower():
-            return """
-{
-  "thesis_mission": "Build the strongest possible case FOR the investment opportunity by analyzing positive market indicators, growth potential, competitive advantages, and favorable expert opinions.",
-  "antithesis_mission": "Build the strongest possible case AGAINST the investment opportunity by examining market risks, competitive threats, financial concerns, and bearish expert opinions.",
-  "thesis_plan": [
-    {
-      "step_number": 1,
-      "description": "Analyze positive market indicators and growth trends",
-      "tool_used": "market-data-api",
-      "tool_selection_justification": "Market data is essential for understanding positive trends and growth potential",
-      "tool_query_rationale": "Focusing on growth metrics, positive sentiment indicators, and upward trends"
-    },
-    {
-      "step_number": 2,
-      "description": "Review favorable expert opinions and analyst reports",
-      "tool_used": "expert-analysis-db",
-      "tool_selection_justification": "Expert opinions provide credibility and validation to the thesis",
-      "tool_query_rationale": "Searching for bullish analyst reports, positive forecasts, and expert endorsements"
-    },
-    {
-      "step_number": 3,
-      "description": "Examine competitive advantages and market position",
-      "tool_used": "competitive-analysis-api",
-      "tool_selection_justification": "Understanding competitive position is crucial for long-term success",
-      "tool_query_rationale": "Analyzing market share, competitive moats, and strategic advantages"
-    }
-  ],
-  "antithesis_plan": [
-    {
-      "step_number": 1,
-      "description": "Identify market risks and potential challenges",
-      "tool_used": "risk-assessment-api",
-      "tool_selection_justification": "Risk analysis is crucial for understanding potential downsides and vulnerabilities",
-      "tool_query_rationale": "Focusing on volatility indicators, negative market signals, and potential disruption factors"
-    },
-    {
-      "step_number": 2,
-      "description": "Review bearish expert opinions and cautionary reports",
-      "tool_used": "expert-analysis-db",
-      "tool_selection_justification": "Contrary expert opinions provide balance and highlight potential blind spots",
-      "tool_query_rationale": "Searching for bearish analyst reports, risk warnings, and skeptical viewpoints"
-    },
-    {
-      "step_number": 3,
-      "description": "Analyze competitive threats and market disruption risks",
-      "tool_used": "competitive-analysis-api",
-      "tool_selection_justification": "Understanding competitive threats is essential for risk assessment",
-      "tool_query_rationale": "Analyzing emerging competitors, disruptive technologies, and market share erosion risks"
-    }
-  ]
-}
-"""
-        else:
-            return "Mock response for development"
+
 
 class OrchestratorAgent:
     """Agent responsible for creating dialectical research missions and plans"""

@@ -304,7 +304,7 @@ stop_services() {
     
     # Stop MCP server
     if is_process_running "start_mcp_server.py" || port_in_use 8001; then
-        if kill_process "start_mcp_server.py" || kill_process "" 8001; then
+    if kill_process "start_mcp_server.py" || kill_process "" 8001; then
             print_success "MCP server stopped"
         else
             print_warning "Failed to stop MCP server"
@@ -381,7 +381,7 @@ show_help() {
     echo "  - Redis (port 6379)"
     echo "  - Celery Worker"
     echo "  - FastAPI Server (port 8000)"
-    echo "  - MCP Server (port 8001)"
+            echo "  - MCP Server (port 8001)"
     echo ""
     echo "Web Interface:"
     echo "  - Main UI: http://localhost:8000"

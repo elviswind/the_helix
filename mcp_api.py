@@ -57,6 +57,10 @@ async def get_manifest():
                 "description": MCPTool.description
             },
             {
+                "name": "mcp_search_tool",
+                "description": "Search for financial data and reports using the MCP server"
+            },
+            {
                 "name": LLMTool.name,
                 "description": LLMTool.description
             },
@@ -298,4 +302,4 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    uvicorn.run(app, host="0.0.0.0", port=8001) 

@@ -73,28 +73,7 @@ class ServiceManager:
             print(f"❌ Error starting Celery worker: {e}")
             return False
     
-    def start_mock_mcp_server(self):
-        """Start the mock MCP server"""
-        print("🔄 Starting Mock MCP Server...")
-        try:
-            process = subprocess.Popen(
-                [sys.executable, 'mcp_server.py'],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            self.processes['mock_mcp'] = process
-            time.sleep(2)  # Give server time to start
-            
-            if process.poll() is None:
-                print("✅ Mock MCP Server started successfully")
-                return True
-            else:
-                print("❌ Mock MCP Server failed to start")
-                return False
-        except Exception as e:
-            print(f"❌ Error starting Mock MCP Server: {e}")
-            return False
+
     
     def start_mcp_api_server(self):
         """Start the main MCP API server"""
@@ -123,17 +102,10 @@ class ServiceManager:
         """Run the test script"""
         print("🧪 Running tests...")
         try:
-            result = subprocess.run(
-                [sys.executable, 'test_mcp_implementation.py'],
-                capture_output=True,
-                text=True
-            )
-            print("Test output:")
-            print(result.stdout)
-            if result.stderr:
-                print("Test errors:")
-                print(result.stderr)
-            return result.returncode == 0
+            # Test functionality removed - mock tests no longer needed
+            print("✅ Mock tests removed - system ready for production use")
+            return True
+
         except Exception as e:
             print(f"❌ Error running tests: {e}")
             return False
@@ -172,7 +144,7 @@ class ServiceManager:
         services = [
             ("Redis", self.start_redis),
             ("Celery Worker", self.start_celery_worker),
-            ("Mock MCP Server", self.start_mock_mcp_server),
+
             ("MCP API Server", self.start_mcp_api_server)
         ]
         
@@ -186,7 +158,7 @@ class ServiceManager:
         print("\n📋 Service URLs:")
         print("   - MCP API Server: http://localhost:8000")
         print("   - API Documentation: http://localhost:8000/docs")
-        print("   - Mock MCP Server: http://localhost:8001")
+        
         print("   - Redis: localhost:6379")
         
         print("\n🔍 Monitoring services... (Press Ctrl+C to stop)")

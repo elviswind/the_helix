@@ -216,7 +216,7 @@ class ServiceManager:
                 f.write(str(process.pid))
             
             print_success(f"MCP server started with PID {process.pid}")
-            print_status("MCP server will be available at http://localhost:8001")
+            print_status("MCP server will be available at http://localhost:8000")
         except Exception as e:
             print_error(f"Failed to start MCP server: {e}")
             sys.exit(1)
