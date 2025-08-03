@@ -14,8 +14,9 @@ from models import get_db, create_tables, Job, EvidenceDossier, ResearchPlan, Re
 from services import CannedResearchService
 from orchestrator_agent import orchestrator_task
 from synthesis_agent import synthesis_agent_task
+from config import config
 
-app = FastAPI(title="Agentic Retrieval System v3.0", version="3.0.0")
+app = FastAPI(title=config.API_TITLE, version=config.API_VERSION)
 
 # Enable CORS for frontend
 app.add_middleware(
@@ -507,4 +508,10 @@ async def get_final_report(job_id: str, db: Session = Depends(get_db)):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    uvicorn.run(
+        "main:app",
+        host=config.HOST,
+        port=config.get_port("fastapi_main"),
+        reload=config.RELOAD,
+        log_level=config.LOG_LEVEL
+    ) 

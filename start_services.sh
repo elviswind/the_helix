@@ -120,13 +120,16 @@ wait_for_service() {
 start_redis() {
     print_status "Starting Redis..."
     
+    # Get port from config
+    local port=$(python3 -c "from config import config; print(config.get_port('redis'))")
+    
     if command_exists redis-server; then
-        if ! port_in_use 6379; then
+        if ! port_in_use $port; then
             redis-server --daemonize yes
-            wait_for_service localhost 6379 "Redis"
+            wait_for_service localhost $port "Redis"
             print_success "Redis started successfully"
         else
-            print_warning "Redis is already running on port 6379"
+            print_warning "Redis is already running on port $port"
         fi
     else
         print_error "Redis is not installed. Please install Redis first."
@@ -166,25 +169,28 @@ start_celery_worker() {
 start_fastapi_server() {
     print_status "Starting FastAPI server..."
     
+    # Get port from config
+    local port=$(python3 -c "from config import config; print(config.get_port('fastapi_main'))")
+    
     if [ -f "main.py" ]; then
-        if ! is_process_running "uvicorn main:app" && ! port_in_use 8000; then
+        if ! is_process_running "uvicorn main:app" && ! port_in_use $port; then
             # Start FastAPI server in background
-            uvicorn main:app --host 0.0.0.0 --port 8000 --reload &
+            uvicorn main:app --host 0.0.0.0 --port $port --reload &
             sleep 2  # Give process time to start
-            if port_in_use 8000; then
+            if port_in_use $port; then
                 local pid=$(find_process "uvicorn main:app")
                 print_success "FastAPI server started with PID $pid"
-                print_status "FastAPI server will be available at http://localhost:8000"
+                print_status "FastAPI server will be available at http://localhost:$port"
             else
                 print_error "Failed to start FastAPI server"
                 exit 1
             fi
         else
-            if port_in_use 8000; then
+            if port_in_use $port; then
                 local pid=$(find_process "uvicorn main:app")
-                print_warning "FastAPI server is already running with PID $pid on port 8000"
+                print_warning "FastAPI server is already running with PID $pid on port $port"
             else
-                print_warning "FastAPI server process found but port 8000 is not responding"
+                print_warning "FastAPI server process found but port $port is not responding"
             fi
         fi
     else
@@ -197,25 +203,28 @@ start_fastapi_server() {
 start_mcp_server() {
     print_status "Starting MCP server..."
     
+    # Get port from config
+    local port=$(python3 -c "from config import config; print(config.get_port('mcp_server'))")
+    
     if [ -f "start_mcp_server.py" ]; then
-        if ! is_process_running "start_mcp_server.py" && ! port_in_use 8001; then
+        if ! is_process_running "start_mcp_server.py" && ! port_in_use $port; then
             # Start MCP server in background
             python3 start_mcp_server.py &
             sleep 2  # Give process time to start
-            if port_in_use 8001; then
+            if port_in_use $port; then
                 local pid=$(find_process "start_mcp_server.py")
                 print_success "MCP server started with PID $pid"
-                print_status "MCP server will be available at http://localhost:8001"
+                print_status "MCP server will be available at http://localhost:$port"
             else
                 print_error "Failed to start MCP server"
                 exit 1
             fi
         else
-            if port_in_use 8001; then
+            if port_in_use $port; then
                 local pid=$(find_process "start_mcp_server.py")
-                print_warning "MCP server is already running with PID $pid on port 8001"
+                print_warning "MCP server is already running with PID $pid on port $port"
             else
-                print_warning "MCP server process found but port 8001 is not responding"
+                print_warning "MCP server process found but port $port is not responding"
             fi
         fi
     else
@@ -316,28 +325,33 @@ show_status() {
     print_status "Service Status:"
     echo "=================="
     
+    # Get ports from config
+    local redis_port=$(python3 -c "from config import config; print(config.get_port('redis'))")
+    local fastapi_port=$(python3 -c "from config import config; print(config.get_port('fastapi_main'))")
+    local mcp_port=$(python3 -c "from config import config; print(config.get_port('mcp_server'))")
+    
     # Check Redis
-    if port_in_use 6379; then
-        local redis_pid=$(find_process "" 6379)
-        echo -e "${GREEN}✓${NC} Redis (port 6379, PID $redis_pid) - Running"
+    if port_in_use $redis_port; then
+        local redis_pid=$(find_process "" $redis_port)
+        echo -e "${GREEN}✓${NC} Redis (port $redis_port, PID $redis_pid) - Running"
     else
-        echo -e "${RED}✗${NC} Redis (port 6379) - Not running"
+        echo -e "${RED}✗${NC} Redis (port $redis_port) - Not running"
     fi
     
     # Check FastAPI server
-    if port_in_use 8000; then
+    if port_in_use $fastapi_port; then
         local fastapi_pid=$(find_process "uvicorn main:app")
-        echo -e "${GREEN}✓${NC} FastAPI Server (port 8000, PID $fastapi_pid) - Running"
+        echo -e "${GREEN}✓${NC} FastAPI Server (port $fastapi_port, PID $fastapi_pid) - Running"
     else
-        echo -e "${RED}✗${NC} FastAPI Server (port 8000) - Not running"
+        echo -e "${RED}✗${NC} FastAPI Server (port $fastapi_port) - Not running"
     fi
     
     # Check MCP server
-    if port_in_use 8001; then
+    if port_in_use $mcp_port; then
         local mcp_pid=$(find_process "start_mcp_server.py")
-        echo -e "${GREEN}✓${NC} MCP Server (port 8001, PID $mcp_pid) - Running"
+        echo -e "${GREEN}✓${NC} MCP Server (port $mcp_port, PID $mcp_pid) - Running"
     else
-        echo -e "${RED}✗${NC} MCP Server (port 8001) - Not running"
+        echo -e "${RED}✗${NC} MCP Server (port $mcp_port) - Not running"
     fi
     
     # Check Celery worker
@@ -394,15 +408,18 @@ case "${1:-start}" in
         print_success "All services started successfully!"
         echo ""
         echo "Services are now running:"
-        echo "  - Redis: localhost:6379"
-        echo "  - FastAPI Server: http://localhost:8000"
-        echo "  - MCP Server: http://localhost:8001"
+        redis_port=$(python3 -c "from config import config; print(config.get_port('redis'))")
+        fastapi_port=$(python3 -c "from config import config; print(config.get_port('fastapi_main'))")
+        mcp_port=$(python3 -c "from config import config; print(config.get_port('mcp_server'))")
+        echo "  - Redis: localhost:$redis_port"
+        echo "  - FastAPI Server: http://localhost:$fastapi_port"
+        echo "  - MCP Server: http://localhost:$mcp_port"
         echo "  - Celery Worker: Background process"
         echo ""
         echo "Web Interface:"
-        echo "  - Main UI: http://localhost:8000"
-        echo "  - Research Interface: http://localhost:8000/static/research.html"
-        echo "  - API Documentation: http://localhost:8000/docs"
+        echo "  - Main UI: http://localhost:$fastapi_port"
+        echo "  - Research Interface: http://localhost:$fastapi_port/static/research.html"
+        echo "  - API Documentation: http://localhost:$fastapi_port/docs"
         echo ""
         echo "To stop all services, run: $0 stop"
         echo "To check status, run: $0 status"

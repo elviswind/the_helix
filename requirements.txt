@@ -6,4 +6,5 @@ requests==2.31.0
 sqlalchemy==2.0.23
 alembic==1.13.1
 celery==5.3.4
-redis==5.0.1 
+redis==5.0.1
+beautifulsoup4==4.12.2 

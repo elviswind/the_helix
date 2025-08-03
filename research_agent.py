@@ -124,20 +124,36 @@ class TrackingMCPClient:
             
             try:
                 # Parse the query to extract parameters based on tool type
-                if tool_name == "10k-financial-reports":
-                    # Query format: "ticker:AAPL section:business_overview"
-                    params = self._parse_10k_query(query)
+                if tool_name == "document_section_retriever":
+                    # Query format: "symbol:AAPL year:2024 section:business_overview"
+                    params = self._parse_document_query(query)
                     response = requests.post(
-                        f"{self.base_url}/10k-report",
-                        json=params,
+                        f"{self.base_url}/tools/execute",
+                        json={
+                            "tool_name": tool_name,
+                            "parameters": params
+                        },
                         timeout=60
                     )
-                elif tool_name == "eod-stock-prices":
-                    # Query format: "ticker:AAPL"
-                    params = self._parse_stock_query(query)
+                elif tool_name == "xbrl_financial_fact_retriever":
+                    # Query format: "symbol:AAPL year:2024 concept:Revenue"
+                    params = self._parse_xbrl_query(query)
                     response = requests.post(
-                        f"{self.base_url}/stock-price",
-                        json=params,
+                        f"{self.base_url}/tools/execute",
+                        json={
+                            "tool_name": tool_name,
+                            "parameters": params
+                        },
+                        timeout=60
+                    )
+                elif tool_name in ["llm_tool", "sec_data_tool", "mcp_server_tool"]:
+                    # For these tools, pass the query directly
+                    response = requests.post(
+                        f"{self.base_url}/tools/execute",
+                        json={
+                            "tool_name": tool_name,
+                            "parameters": {"query": query}
+                        },
                         timeout=60
                     )
                 else:
@@ -191,6 +207,40 @@ class TrackingMCPClient:
         
         if "ticker" not in params:
             raise ValueError("Stock price query must include ticker parameter")
+        
+        return params
+    
+    def _parse_document_query(self, query: str) -> dict:
+        """Parse document section query to extract symbol, year, and section"""
+        # Expected format: "symbol:AAPL year:2024 section:business_overview"
+        params = {}
+        for part in query.split():
+            if part.startswith("symbol:"):
+                params["symbol"] = part.split(":", 1)[1]
+            elif part.startswith("year:"):
+                params["year"] = int(part.split(":", 1)[1])
+            elif part.startswith("section:"):
+                params["section"] = part.split(":", 1)[1]
+        
+        if "symbol" not in params or "year" not in params or "section" not in params:
+            raise ValueError("Document query must include symbol, year, and section parameters")
+        
+        return params
+    
+    def _parse_xbrl_query(self, query: str) -> dict:
+        """Parse XBRL query to extract symbol, year, and concept"""
+        # Expected format: "symbol:AAPL year:2024 concept:Revenue"
+        params = {}
+        for part in query.split():
+            if part.startswith("symbol:"):
+                params["symbol"] = part.split(":", 1)[1]
+            elif part.startswith("year:"):
+                params["year"] = int(part.split(":", 1)[1])
+            elif part.startswith("concept:"):
+                params["concept"] = part.split(":", 1)[1]
+        
+        if "symbol" not in params or "year" not in params or "concept" not in params:
+            raise ValueError("XBRL query must include symbol, year, and concept parameters")
         
         return params
 
@@ -482,53 +532,72 @@ Selected tool:"""
         # Check for financial/10-K related keywords
         financial_keywords = ['financial', 'earnings', 'revenue', 'profit', '10-k', '10k', 'quarterly', 'annual', 'sec', 'filing']
         if any(keyword in step_lower for keyword in financial_keywords):
-            if '10k-financial-reports' in available_tool_names:
-                return '10k-financial-reports'
+            if 'xbrl_financial_fact_retriever' in available_tool_names:
+                return 'xbrl_financial_fact_retriever'
+            elif 'document_section_retriever' in available_tool_names:
+                return 'document_section_retriever'
         
-        # Check for stock/market related keywords
-        stock_keywords = ['stock', 'price', 'market', 'trading', 'valuation', 'share', 'market cap', 'pe ratio']
-        if any(keyword in step_lower for keyword in stock_keywords):
-            if 'eod-stock-prices' in available_tool_names:
-                return 'eod-stock-prices'
+        # Check for document/section related keywords
+        document_keywords = ['section', 'risk', 'management', 'business', 'overview', 'discussion', 'compensation']
+        if any(keyword in step_lower for keyword in document_keywords):
+            if 'document_section_retriever' in available_tool_names:
+                return 'document_section_retriever'
         
-        # Default fallback - prefer 10k-financial-reports for business analysis
-        if '10k-financial-reports' in available_tool_names:
-            return '10k-financial-reports'
-        elif 'eod-stock-prices' in available_tool_names:
-            return 'eod-stock-prices'
+        # Check for analysis/insight keywords
+        analysis_keywords = ['analysis', 'insight', 'opinion', 'expert', 'assessment', 'evaluation']
+        if any(keyword in step_lower for keyword in analysis_keywords):
+            if 'llm_tool' in available_tool_names:
+                return 'llm_tool'
+        
+        # Check for SEC/data availability keywords
+        sec_keywords = ['available', 'companies', 'filings', 'sec', 'data']
+        if any(keyword in step_lower for keyword in sec_keywords):
+            if 'sec_data_tool' in available_tool_names:
+                return 'sec_data_tool'
+        
+        # Default fallback - prefer document_section_retriever for business analysis
+        if 'document_section_retriever' in available_tool_names:
+            return 'document_section_retriever'
+        elif 'xbrl_financial_fact_retriever' in available_tool_names:
+            return 'xbrl_financial_fact_retriever'
+        elif 'llm_tool' in available_tool_names:
+            return 'llm_tool'
         elif available_tool_names:
             return available_tool_names[0]
         else:
-            return '10k-financial-reports'  # Ultimate fallback
+            return 'document_section_retriever'  # Ultimate fallback
     
     def formulate_query(self, step_description: str, tool_name: str, job_id: str, dossier_id: str) -> str:
         """Use LLM to formulate a query for the selected tool"""
         
-        if tool_name == "10k-financial-reports":
-            prompt = f"""You are a research agent that needs to formulate a query for the 10-K financial reports tool.
+        if tool_name == "document_section_retriever":
+            prompt = f"""You are a research agent that needs to formulate a query for the document section retriever tool.
 
 Research step: {step_description}
 Selected tool: {tool_name}
 
-This tool requires two parameters:
-1. ticker: A stock ticker symbol (e.g., AAPL, MSFT, GOOGL)
-2. section: The section of the 10-K to retrieve (business_overview, risk_factors, management_discussion, financial_statements, executive_compensation)
+This tool requires three parameters:
+1. symbol: A stock ticker symbol (e.g., AAPL, MSFT, GOOGL)
+2. year: The year of the filing (e.g., 2023, 2024)
+3. section: The section of the 10-K to retrieve (business_overview, risk_factors, management_discussion, financial_statements, executive_compensation)
 
 Based on the research step, determine which company's 10-K and which section would be most relevant.
-Respond in the format: "ticker:AAPL section:business_overview"
+Respond in the format: "symbol:AAPL year:2024 section:business_overview"
 
 Query:"""
-        elif tool_name == "eod-stock-prices":
-            prompt = f"""You are a research agent that needs to formulate a query for the EOD stock prices tool.
+        elif tool_name == "xbrl_financial_fact_retriever":
+            prompt = f"""You are a research agent that needs to formulate a query for the XBRL financial fact retriever tool.
 
 Research step: {step_description}
 Selected tool: {tool_name}
 
-This tool requires one parameter:
-1. ticker: A stock ticker symbol (e.g., AAPL, MSFT, GOOGL, TSLA, AMZN)
+This tool requires three parameters:
+1. symbol: A stock ticker symbol (e.g., AAPL, MSFT, GOOGL)
+2. year: The year of the filing (e.g., 2023, 2024)
+3. concept: The financial concept to retrieve (Revenue, NetIncome, GrossProfit, TotalAssets, Inventory)
 
-Based on the research step, determine which company's stock price data would be most relevant.
-Respond in the format: "ticker:AAPL"
+Based on the research step, determine which company's financial data would be most relevant.
+Respond in the format: "symbol:AAPL year:2024 concept:Revenue"
 
 Query:"""
         else:
@@ -564,10 +633,11 @@ Query:"""
         if not manifest:
             # Fallback to default tools if MCP server is unavailable
             available_tools = [
-                {"name": "market-data-api", "description": "Market data and trends"},
-                {"name": "expert-analysis-db", "description": "Expert opinions and analysis"},
-                {"name": "competitive-analysis-api", "description": "Competitive analysis"},
-                {"name": "financial-data-api", "description": "Financial data and metrics"}
+                {"name": "xbrl_financial_fact_retriever", "description": "Retrieves a specific numerical financial fact (like Revenue, NetIncome) for a given company and year from its XBRL filing."},
+                {"name": "document_section_retriever", "description": "Retrieves the full text of a specific section (like 'Risk Factors') from a company's 10-K HTML filing."},
+                {"name": "mcp_server_tool", "description": "Interfaces with the MCP server to retrieve financial data and reports"},
+                {"name": "llm_tool", "description": "Uses the LLM to generate analysis and insights"},
+                {"name": "sec_data_tool", "description": "Get information about available SEC filings and companies"}
             ]
         else:
             available_tools = manifest.get("tools", [])
@@ -607,8 +677,8 @@ Query:"""
         
         # Step 6: Create evidence items from search results
         # Handle different response formats based on tool type
-        if tool_name == "10k-financial-reports":
-            # 10-K response is a single object
+        if tool_name == "document_section_retriever":
+            # Document section response is a single object
             result = search_results
             tags = ["10k-report", result.get("section", "financial")]
             if step.proxy_hypothesis:
@@ -617,31 +687,31 @@ Query:"""
             evidence_item = EvidenceItem(
                 id=f"ev-{uuid.uuid4().hex[:8]}",
                 dossier_id=dossier.id,
-                title=f"{result['company_name']} - {result['title']}",
+                title=f"{result['symbol']} - {result['section']} ({result['year']})",
                 content=result["content"],
-                source=f"10-K Filing ({result['filing_date']}) - Page {result['page']}",
+                source=f"10-K Filing ({result['year']}) - {result.get('source', 'SEC')}",
                 confidence=0.95,  # High confidence for official filings
                 tags=tags
             )
             db.add(evidence_item)
             
-        elif tool_name == "eod-stock-prices":
-            # Stock price response is a single object
+        elif tool_name == "xbrl_financial_fact_retriever":
+            # XBRL financial fact response is a single object
             result = search_results
-            tags = ["stock-price", "financial-data"]
+            tags = ["financial-data", "xbrl"]
             if step.proxy_hypothesis:
                 tags.extend(["proxy-evidence", step.proxy_hypothesis.get("observable_proxy", "proxy")])
             
-            # Format the content to include key financial metrics
-            content = f"Current Price: ${result['current_price']:.2f} | Change: {result['change']:+.2f} ({result['change_percent']:+.2f}%) | Volume: {result['volume']:,} | Market Cap: ${result['market_cap']:,} | P/E Ratio: {result['pe_ratio']:.1f} | Dividend Yield: {result['dividend_yield']:.2f}%"
+            # Format the content to include the financial fact
+            content = f"{result['concept']}: ${result['value']:,} ({result['unit']}) for {result['year']}"
             
             evidence_item = EvidenceItem(
                 id=f"ev-{uuid.uuid4().hex[:8]}",
                 dossier_id=dossier.id,
-                title=f"{result['company_name']} ({result['symbol']}) Stock Price",
+                title=f"{result['symbol']} - {result['concept']} ({result['year']})",
                 content=content,
-                source=f"EOD Stock Data - {result['last_updated']}",
-                confidence=0.98,  # Very high confidence for real-time market data
+                source=f"XBRL Filing {result['year']}",
+                confidence=0.98,  # Very high confidence for official financial data
                 tags=tags
             )
             db.add(evidence_item)

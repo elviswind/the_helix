@@ -26,7 +26,7 @@
             border-radius: 20px;
             box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
             padding: 40px;
-            max-width: 600px;
+            max-width: 800px;
             width: 100%;
             text-align: center;
         }
@@ -151,6 +151,99 @@
             color: #666;
             line-height: 1.6;
         }
+
+        .recent-queries {
+            background: #f8f9fa;
+            border-left: 4px solid #28a745;
+            padding: 20px;
+            margin-bottom: 30px;
+            border-radius: 8px;
+            text-align: left;
+        }
+
+        .recent-queries h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.1rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .recent-queries-list {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+        }
+
+        .recent-queries-list li {
+            padding: 12px 0;
+            border-bottom: 1px solid #e9ecef;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .recent-queries-list li:last-child {
+            border-bottom: none;
+        }
+
+        .query-text {
+            flex: 1;
+            color: #495057;
+            font-size: 0.95rem;
+            line-height: 1.4;
+        }
+
+        .query-meta {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 4px;
+            min-width: 120px;
+        }
+
+        .query-status {
+            font-size: 0.8rem;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .status-pending {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status-complete {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-failed {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .query-date {
+            font-size: 0.75rem;
+            color: #6c757d;
+        }
+
+        .no-recent-queries {
+            color: #6c757d;
+            font-style: italic;
+            text-align: center;
+            padding: 20px 0;
+        }
+
+        .recent-queries-loading {
+            text-align: center;
+            padding: 20px 0;
+            color: #6c757d;
+        }
     </style>
 </head>
 <body>
@@ -161,6 +254,19 @@
         <div class="info-box">
             <h3>🎯 How it works</h3>
             <p>Enter your research query below. Our system will create two parallel research dossiers: one building the strongest case FOR your query, and one building the strongest case AGAINST it. This dialectical approach ensures balanced, unbiased analysis.</p>
+        </div>
+
+        <div class="recent-queries">
+            <h3>📋 Recent Queries</h3>
+            <div class="recent-queries-loading" id="recentQueriesLoading">
+                Loading recent queries...
+            </div>
+            <ul class="recent-queries-list" id="recentQueriesList" style="display: none;">
+                <!-- Recent queries will be populated here -->
+            </ul>
+            <div class="no-recent-queries" id="noRecentQueries" style="display: none;">
+                No recent queries found.
+            </div>
         </div>
 
         <form id="researchForm">
@@ -192,6 +298,92 @@
         const submitBtn = document.getElementById('submitBtn');
         const loading = document.getElementById('loading');
         const error = document.getElementById('error');
+        const recentQueriesList = document.getElementById('recentQueriesList');
+        const recentQueriesLoading = document.getElementById('recentQueriesLoading');
+        const noRecentQueries = document.getElementById('noRecentQueries');
+
+        // Load recent queries on page load
+        document.addEventListener('DOMContentLoaded', loadRecentQueries);
+
+        async function loadRecentQueries() {
+            try {
+                const response = await fetch('/v2/research/recent');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const recentJobs = await response.json();
+                
+                recentQueriesLoading.style.display = 'none';
+                
+                if (recentJobs.length === 0) {
+                    noRecentQueries.style.display = 'block';
+                    return;
+                }
+
+                recentQueriesList.innerHTML = '';
+                
+                recentJobs.forEach(job => {
+                    const li = document.createElement('li');
+                    
+                    const queryText = document.createElement('div');
+                    queryText.className = 'query-text';
+                    queryText.textContent = job.query;
+                    
+                    const queryMeta = document.createElement('div');
+                    queryMeta.className = 'query-meta';
+                    
+                    const status = document.createElement('div');
+                    status.className = `query-status status-${job.status.toLowerCase()}`;
+                    status.textContent = job.status;
+                    
+                    const date = document.createElement('div');
+                    date.className = 'query-date';
+                    date.textContent = formatDate(job.created_at);
+                    
+                    queryMeta.appendChild(status);
+                    queryMeta.appendChild(date);
+                    
+                    li.appendChild(queryText);
+                    li.appendChild(queryMeta);
+                    
+                    // Make the query clickable to view results if completed
+                    if (job.status === 'COMPLETE') {
+                        li.style.cursor = 'pointer';
+                        li.addEventListener('click', () => {
+                            window.location.href = `/research/${job.id}`;
+                        });
+                        li.title = 'Click to view results';
+                    }
+                    
+                    recentQueriesList.appendChild(li);
+                });
+                
+                recentQueriesList.style.display = 'block';
+                
+            } catch (err) {
+                console.error('Error loading recent queries:', err);
+                recentQueriesLoading.style.display = 'none';
+                noRecentQueries.style.display = 'block';
+                noRecentQueries.textContent = 'Failed to load recent queries.';
+            }
+        }
+
+        function formatDate(dateString) {
+            const date = new Date(dateString);
+            const now = new Date();
+            const diffInHours = (now - date) / (1000 * 60 * 60);
+            
+            if (diffInHours < 1) {
+                return 'Just now';
+            } else if (diffInHours < 24) {
+                const hours = Math.floor(diffInHours);
+                return `${hours}h ago`;
+            } else {
+                const days = Math.floor(diffInHours / 24);
+                return `${days}d ago`;
+            }
+        }
 
         form.addEventListener('submit', async (e) => {
             e.preventDefault();

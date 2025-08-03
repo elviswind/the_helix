@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """
-Script to start the Mock MCP Server for Checkpoint 4 testing
+Startup script for the AR v3.0 MCP Server
 """
 
 import uvicorn
-from mcp_server import app
+from config import config
 
 if __name__ == "__main__":
-    print("Starting Mock MCP Server on http://localhost:8001")
-    print("Available endpoints:")
-    print("  - GET  /manifest  - Get available tools")
-    print("  - POST /search    - Search for data")
-    print("  - GET  /health    - Health check")
-    print("\nPress Ctrl+C to stop the server")
+    print("Starting AR v3.0 MCP Server...")
+    print(f"API will be available at: {config.get_url('mcp_server')}")
+    print(f"API documentation at: {config.get_url('mcp_server')}/docs")
     
-    uvicorn.run(app, host="0.0.0.0", port=8001, log_level="info") 
+    uvicorn.run(
+        "mcp_api:app",
+        host=config.HOST,
+        port=config.get_port("mcp_server"),
+        reload=config.RELOAD,
+        log_level=config.LOG_LEVEL
+    ) 
