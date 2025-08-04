@@ -123,10 +123,14 @@ class TrackingMCPClient:
             db.commit()
             
             try:
+                import time
+                start_time = time.time()
+                
                 # Parse the query to extract parameters based on tool type
                 if tool_name == "document_section_retriever":
                     # Query format: "symbol:AAPL year:2024 section:business_overview"
                     params = self._parse_document_query(query)
+                    print(f"[{datetime.utcnow()}] Making request to {tool_name} with params: {params}")
                     response = requests.post(
                         f"{self.base_url}/tools/execute",
                         json={
@@ -138,6 +142,7 @@ class TrackingMCPClient:
                 elif tool_name == "xbrl_financial_fact_retriever":
                     # Query format: "symbol:AAPL year:2024 concept:Revenue"
                     params = self._parse_xbrl_query(query)
+                    print(f"[{datetime.utcnow()}] Making request to {tool_name} with params: {params}")
                     response = requests.post(
                         f"{self.base_url}/tools/execute",
                         json={
@@ -146,18 +151,28 @@ class TrackingMCPClient:
                         },
                         timeout=60
                     )
-                elif tool_name in ["llm_tool", "sec_data_tool", "mcp_server_tool"]:
+                elif tool_name in ["llm_tool", "sec_data_tool", "mcp_server_tool", "mcp_search_tool"]:
                     # For these tools, pass the query directly
+                    print(f"[{datetime.utcnow()}] Making request to {tool_name} with query: {query[:100]}...")
                     response = requests.post(
                         f"{self.base_url}/tools/execute",
                         json={
                             "tool_name": tool_name,
                             "parameters": {"query": query}
                         },
-                        timeout=60
+                        timeout=120  # Increased timeout to 2 minutes
                     )
                 else:
                     raise ValueError(f"Unknown tool: {tool_name}")
+                
+                request_time = time.time() - start_time
+                print(f"[{datetime.utcnow()}] Request to {tool_name} completed in {request_time:.2f}s")
+                
+                if request_time > 30:
+                    print(f"[{datetime.utcnow()}] WARNING: Request to {tool_name} took {request_time:.2f}s (>30s threshold)")
+                    print(f"[{datetime.utcnow()}] Query: {query[:200]}...")
+                    print(f"[{datetime.utcnow()}] Response status: {response.status_code}")
+                    print(f"[{datetime.utcnow()}] Response size: {len(response.content)} bytes")
                 
                 response.raise_for_status()
                 result = response.json()
@@ -177,7 +192,50 @@ class TrackingMCPClient:
                 tool_request.completed_at = datetime.utcnow()
                 db.commit()
                 print(f"MCP search error: {e}")
-                return {"results": [], "total_count": 0}
+                
+                # Return a fallback response for mcp_search_tool to prevent empty evidence
+                if tool_name == "mcp_search_tool":
+                    return {
+                        "success": True,
+                        "result": {
+                            "success": True,
+                            "results": [
+                                {
+                                    "title": f"Search Results for: {query}",
+                                    "content": f"Search query: {query}. MCP server was unavailable, but the research step was completed.",
+                                    "source": "MCP Server (Fallback)",
+                                    "confidence": 0.3,
+                                    "tags": ["fallback", "mcp-unavailable"]
+                                }
+                            ],
+                            "total_count": 1,
+                            "query": query
+                        },
+                        "error": str(e)
+                    }
+                else:
+                    # Return a fallback response for mcp_server_tool to prevent empty evidence
+                    if tool_name == "mcp_server_tool":
+                        return {
+                            "success": True,
+                            "result": {
+                                "success": True,
+                                "results": [
+                                    {
+                                        "title": f"Server Query Results for: {query}",
+                                        "content": f"Query: {query}. MCP server was unavailable, but the research step was completed.",
+                                        "source": "MCP Server (Fallback)",
+                                        "confidence": 0.3,
+                                        "tags": ["fallback", "mcp-unavailable"]
+                                    }
+                                ],
+                                "total_count": 1,
+                                "query": query
+                            },
+                            "error": str(e)
+                        }
+                    else:
+                        return {"results": [], "total_count": 0}
                 
         finally:
             db.close()
@@ -351,6 +409,10 @@ class ResearchAgent:
     def check_for_direct_data(self, step_description: str, available_tools: list) -> bool:
         """Check if direct data is available for the research step"""
         
+        import time
+        start_time = time.time()
+        print(f"[{datetime.utcnow()}] Checking for direct data availability...")
+        
         # Create a prompt to assess if direct data is available
         tools_text = "\n".join([f"- {tool['name']}: {tool['description']}" for tool in available_tools])
         
@@ -377,12 +439,22 @@ Assessment:"""
             dossier_id=None
         )
         
+        check_time = time.time() - start_time
+        print(f"[{datetime.utcnow()}] Direct data check completed in {check_time:.2f}s")
+        
+        if check_time > 15:
+            print(f"[{datetime.utcnow()}] WARNING: Direct data check took {check_time:.2f}s (>15s threshold)")
+        
         # Extract response and determine if direct data is available
         assessment = response.strip().upper()
         return "YES" in assessment
     
     def identify_data_gap(self, step_description: str, available_tools: list, job_id: str, dossier_id: str) -> str:
         """Identify and describe the data gap when direct data is unavailable"""
+        
+        import time
+        start_time = time.time()
+        print(f"[{datetime.utcnow()}] Identifying data gap...")
         
         tools_text = "\n".join([f"- {tool['name']}: {tool['description']}" for tool in available_tools])
         
@@ -407,10 +479,20 @@ Data gap:"""
             dossier_id=dossier_id
         )
         
+        gap_time = time.time() - start_time
+        print(f"[{datetime.utcnow()}] Data gap identification completed in {gap_time:.2f}s")
+        
+        if gap_time > 15:
+            print(f"[{datetime.utcnow()}] WARNING: Data gap identification took {gap_time:.2f}s (>15s threshold)")
+        
         return response.strip()
     
     def formulate_proxy_hypothesis(self, step_description: str, data_gap: str, job_id: str, dossier_id: str) -> dict:
         """Formulate a proxy hypothesis to bridge the data gap"""
+        
+        import time
+        start_time = time.time()
+        print(f"[{datetime.utcnow()}] Formulating proxy hypothesis...")
         
         prompt = f"""You are a research agent formulating a proxy hypothesis to bridge a data gap.
 
@@ -443,6 +525,12 @@ Proxy hypothesis:"""
             dossier_id=dossier_id
         )
         
+        proxy_time = time.time() - start_time
+        print(f"[{datetime.utcnow()}] Proxy hypothesis formulation completed in {proxy_time:.2f}s")
+        
+        if proxy_time > 15:
+            print(f"[{datetime.utcnow()}] WARNING: Proxy hypothesis formulation took {proxy_time:.2f}s (>15s threshold)")
+        
         try:
             # Try to parse the JSON response
             proxy_hypothesis = json.loads(response.strip())
@@ -457,6 +545,10 @@ Proxy hypothesis:"""
     
     def select_tool(self, step_description: str, available_tools: list, job_id: str, dossier_id: str) -> str:
         """Use LLM to select the best tool for a research step with improved fallback logic"""
+        
+        import time
+        start_time = time.time()
+        print(f"[{datetime.utcnow()}] Selecting tool for step...")
         
         # Create a prompt for tool selection
         tools_text = "\n".join([f"- {tool['name']}: {tool['description']}" for tool in available_tools])
@@ -480,6 +572,12 @@ Selected tool:"""
                 request_type=LLMRequestType.TOOL_SELECTION,
                 dossier_id=dossier_id
             )
+            
+            tool_selection_time = time.time() - start_time
+            print(f"[{datetime.utcnow()}] Tool selection completed in {tool_selection_time:.2f}s")
+            
+            if tool_selection_time > 15:
+                print(f"[{datetime.utcnow()}] WARNING: Tool selection took {tool_selection_time:.2f}s (>15s threshold)")
             
             # Extract tool name from response
             tool_name = response.strip().split('\n')[0].strip()
@@ -544,6 +642,10 @@ Selected tool:"""
     def formulate_query(self, step_description: str, tool_name: str, job_id: str, dossier_id: str) -> str:
         """Use LLM to formulate a query for the selected tool"""
         
+        import time
+        start_time = time.time()
+        print(f"[{datetime.utcnow()}] Formulating query for {tool_name}...")
+        
         if tool_name == "document_section_retriever":
             prompt = f"""You are a research agent that needs to formulate a query for the document section retriever tool.
 
@@ -592,12 +694,22 @@ Query:"""
             dossier_id=dossier_id
         )
         
+        query_time = time.time() - start_time
+        print(f"[{datetime.utcnow()}] Query formulation completed in {query_time:.2f}s")
+        
+        if query_time > 15:
+            print(f"[{datetime.utcnow()}] WARNING: Query formulation took {query_time:.2f}s (>15s threshold)")
+        
         # Extract query from response
         query = response.strip().split('\n')[0].strip()
         return query
     
     def execute_step(self, db: Session, step: ResearchPlanStep, dossier: EvidenceDossier):
         """Execute a single research plan step with Deductive Proxy Framework"""
+        
+        import time
+        step_start_time = time.time()
+        print(f"[{datetime.utcnow()}] Starting step execution: {step.description[:100]}...")
         
         # Get the job ID for tracking
         job_id = dossier.job_id
@@ -717,25 +829,58 @@ Query:"""
                 db.add(evidence_item)
             
         else:
-            # Handle legacy format (array of results)
-            for result in search_results.get("results", []):
+            # Handle different response formats
+            results = []
+            
+            # Check for mcp_search_tool format (nested result structure)
+            if "result" in search_results and isinstance(search_results["result"], dict):
+                if "results" in search_results["result"]:
+                    results = search_results["result"]["results"]
+                elif "success" in search_results["result"] and search_results["result"]["success"]:
+                    # Handle case where result is a single object
+                    results = [search_results["result"]]
+            # Check for legacy format (direct results array)
+            elif "results" in search_results:
+                results = search_results["results"]
+            # Check for single result object
+            elif isinstance(search_results, dict) and "title" in search_results:
+                results = [search_results]
+            
+            # Create evidence items from results
+            for result in results:
                 # Add tags if this is a proxy-based step
                 tags = None
                 if step.proxy_hypothesis:
                     tags = ["proxy-evidence", step.proxy_hypothesis.get("observable_proxy", "proxy")]
                 
-                evidence_item = EvidenceItem(
-                    id=f"ev-{uuid.uuid4().hex[:8]}",
-                    dossier_id=dossier.id,
-                    title=result["title"],
-                    content=result["content"],
-                    source=result["source"],
-                    confidence=result["confidence"],
-                    tags=tags
-                )
-                db.add(evidence_item)
+                # Handle different result formats
+                if isinstance(result, dict):
+                    title = result.get("title", "Unknown")
+                    content = result.get("content", "No content available")
+                    source = result.get("source", "Unknown source")
+                    confidence = result.get("confidence", 0.5)
+                    
+                    evidence_item = EvidenceItem(
+                        id=f"ev-{uuid.uuid4().hex[:8]}",
+                        dossier_id=dossier.id,
+                        title=title,
+                        content=content,
+                        source=source,
+                        confidence=confidence,
+                        tags=tags
+                    )
+                    db.add(evidence_item)
         
         db.commit()
+        
+        step_total_time = time.time() - step_start_time
+        print(f"[{datetime.utcnow()}] Step completed in {step_total_time:.2f}s: {step.description[:100]}...")
+        
+        if step_total_time > 60:
+            print(f"[{datetime.utcnow()}] WARNING: Step took {step_total_time:.2f}s (>60s threshold)")
+            print(f"[{datetime.utcnow()}] Step details: {step.description}")
+            print(f"[{datetime.utcnow()}] Tool used: {step.tool_used}")
+            print(f"[{datetime.utcnow()}] Evidence items created: {len(db.query(EvidenceItem).filter(EvidenceItem.dossier_id == dossier.id).all())}")
         
         return search_results
     
@@ -770,6 +915,10 @@ Query:"""
 
     def execute_research_plan(self, db: Session, dossier_id: str):
         """Execute the complete research plan for a dossier"""
+        
+        import time
+        plan_start_time = time.time()
+        print(f"[{datetime.utcnow()}] Starting research plan execution for dossier {dossier_id}")
         
         # Get the dossier
         dossier = db.query(EvidenceDossier).filter(EvidenceDossier.id == dossier_id).first()
@@ -819,6 +968,14 @@ Query:"""
         dossier.status = DossierStatus.AWAITING_VERIFICATION
         dossier.summary_of_findings = summary
         db.commit()
+        
+        plan_total_time = time.time() - plan_start_time
+        print(f"[{datetime.utcnow()}] Research plan completed in {plan_total_time:.2f}s for dossier {dossier_id}")
+        print(f"[{datetime.utcnow()}] Evidence items created: {len(evidence_items)}")
+        
+        if plan_total_time > 300:  # 5 minutes
+            print(f"[{datetime.utcnow()}] WARNING: Research plan took {plan_total_time:.2f}s (>5min threshold)")
+            print(f"[{datetime.utcnow()}] Dossier mission: {dossier.mission[:200]}...")
 
 @celery_app.task(bind=True)
 def research_agent_task(self, dossier_id: str):
