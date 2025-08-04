@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Synthesis Report Viewer - AR System v3.0</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f8f9fa;
+            min-height: 100vh;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px 0;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .header-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+        }
+
+        .back-btn {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            text-decoration: none;
+            transition: background 0.3s ease;
+        }
+
+        .back-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .job-selector {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+            text-align: center;
+        }
+
+        .job-selector h2 {
+            margin-bottom: 20px;
+            color: #333;
+        }
+
+        .job-input {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .job-input input {
+            padding: 12px 16px;
+            border: 2px solid #e1e5e9;
+            border-radius: 8px;
+            font-size: 1rem;
+            width: 300px;
+        }
+
+        .job-input input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 600;
+            transition: transform 0.2s ease;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+
+        .btn:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #6c757d;
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+            border: 1px solid #f5c6cb;
+        }
+
+        .report-panel {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+            display: none;
+        }
+
+        .report-header {
+            border-bottom: 2px solid #e9ecef;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+
+        .report-title {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .report-meta {
+            display: flex;
+            gap: 30px;
+            color: #6c757d;
+            font-size: 0.9rem;
+        }
+
+        .report-content {
+            line-height: 1.6;
+            color: #333;
+        }
+
+        .report-content h1,
+        .report-content h2,
+        .report-content h3 {
+            color: #333;
+            margin: 20px 0 10px 0;
+        }
+
+        .report-content p {
+            margin-bottom: 15px;
+        }
+
+        .report-content ul,
+        .report-content ol {
+            margin: 15px 0;
+            padding-left: 20px;
+        }
+
+        .report-actions {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #e9ecef;
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+        }
+
+        .action-btn {
+            background: #6c757d;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: background 0.3s ease;
+        }
+
+        .action-btn:hover {
+            background: #5a6268;
+        }
+
+        .action-btn.primary {
+            background: #007bff;
+        }
+
+        .action-btn.primary:hover {
+            background: #0056b3;
+        }
+
+        .recent-jobs {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 20px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        }
+
+        .recent-jobs h3 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+
+        .job-list {
+            list-style: none;
+        }
+
+        .job-item {
+            padding: 10px;
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+
+        .job-item:hover {
+            background: #f8f9fa;
+        }
+
+        .job-item.completed {
+            border-left: 4px solid #28a745;
+        }
+
+        .job-item.pending {
+            border-left: 4px solid #ffc107;
+        }
+
+        .job-id {
+            font-weight: 600;
+            color: #333;
+        }
+
+        .job-query {
+            color: #6c757d;
+            font-size: 0.9rem;
+            margin-top: 5px;
+        }
+
+        .job-status {
+            font-size: 0.8rem;
+            color: #28a745;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-content">
+            <div class="logo">📊 Synthesis Report Viewer</div>
+            <a href="/" class="back-btn">← Back to Home</a>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="job-selector">
+            <h2>View Synthesis Report</h2>
+            <p style="margin-bottom: 20px; color: #6c757d;">
+                Enter a job ID to view its synthesis report. Only completed jobs with generated reports are available.
+            </p>
+            
+            <div class="job-input">
+                <input type="text" id="jobIdInput" placeholder="Enter job ID (e.g., job-v2-87ea7324)" value="job-v2-87ea7324">
+                <button class="btn" onclick="loadReport()">Load Report</button>
+            </div>
+
+            <div class="recent-jobs">
+                <h3>Recent Jobs (Completed jobs shown first)</h3>
+                <div id="recentJobsLoading">Loading recent jobs...</div>
+                <ul class="job-list" id="recentJobsList" style="display: none;"></ul>
+            </div>
+        </div>
+
+        <div class="loading" id="loading" style="display: none;">
+            <h3>Loading report...</h3>
+            <p>Please wait while we fetch the synthesis report.</p>
+        </div>
+
+        <div class="error" id="error" style="display: none;"></div>
+
+        <div class="report-panel" id="reportPanel">
+            <div class="report-header">
+                <div class="report-title">📊 Final Synthesis Report</div>
+                <div class="report-meta">
+                    <div class="original-query">
+                        <strong>Original Query:</strong> <span id="original-query"></span>
+                    </div>
+                    <div class="report-created">
+                        <strong>Generated:</strong> <span id="report-created"></span>
+                    </div>
+                    <div class="report-id">
+                        <strong>Report ID:</strong> <span id="report-id"></span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="report-content" id="report-content">
+                <!-- The synthesis report content will be inserted here -->
+            </div>
+
+            <div class="report-actions">
+                <button class="action-btn primary" onclick="window.print()">🖨️ Print Report</button>
+                <button class="action-btn" onclick="downloadReport()">📥 Download Report</button>
+                <button class="action-btn" onclick="shareReport()">📤 Share Report</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentJobId = null;
+
+        // Load recent jobs on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadRecentJobs();
+            
+            // Allow Enter key to load report
+            document.getElementById('jobIdInput').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    loadReport();
+                }
+            });
+        });
+
+        async function loadRecentJobs() {
+            try {
+                const response = await fetch('/v2/research/recent');
+                if (!response.ok) throw new Error('Failed to load recent jobs');
+                
+                const jobs = await response.json();
+                console.log('Loaded recent jobs:', jobs);
+                displayRecentJobs(jobs);
+            } catch (error) {
+                console.error('Error loading recent jobs:', error);
+                document.getElementById('recentJobsLoading').textContent = 'Failed to load recent jobs';
+            }
+        }
+
+        function displayRecentJobs(jobs) {
+            const container = document.getElementById('recentJobsList');
+            const loading = document.getElementById('recentJobsLoading');
+            
+            if (jobs.length === 0) {
+                loading.textContent = 'No recent jobs found';
+                return;
+            }
+
+            loading.style.display = 'none';
+            container.style.display = 'block';
+
+            // Filter to show only completed jobs first, then others
+            const completedJobs = jobs.filter(job => job.status === 'COMPLETE');
+            const otherJobs = jobs.filter(job => job.status !== 'COMPLETE');
+            const sortedJobs = [...completedJobs, ...otherJobs];
+
+            container.innerHTML = sortedJobs.map(job => `
+                <li class="job-item ${job.status === 'COMPLETE' ? 'completed' : 'pending'}" onclick="loadJobReport('${job.id}')">
+                    <div class="job-id">${job.id}</div>
+                    <div class="job-query">${job.query}</div>
+                    <div class="job-status">${job.status}</div>
+                </li>
+            `).join('');
+        }
+
+        function loadJobReport(jobId) {
+            console.log('Loading job report for:', jobId);
+            if (!jobId || jobId === 'undefined') {
+                console.error('Invalid job ID:', jobId);
+                showError('Invalid job ID');
+                return;
+            }
+            document.getElementById('jobIdInput').value = jobId;
+            loadReport();
+        }
+
+        async function loadReport() {
+            const jobId = document.getElementById('jobIdInput').value.trim();
+            if (!jobId) {
+                showError('Please enter a job ID');
+                return;
+            }
+
+            currentJobId = jobId;
+            showLoading();
+            hideError();
+            hideReport();
+
+            try {
+                const response = await fetch(`/v3/jobs/${jobId}/report`);
+                
+                if (!response.ok) {
+                    if (response.status === 404) {
+                        throw new Error('Job not found or no synthesis report available');
+                    } else if (response.status === 400) {
+                        throw new Error('Job is not complete. Synthesis report not available yet.');
+                    } else {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                }
+                
+                const report = await response.json();
+                displayReport(report);
+                
+            } catch (error) {
+                console.error('Error loading report:', error);
+                showError(error.message);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        function displayReport(report) {
+            // Show the report panel
+            document.getElementById('reportPanel').style.display = 'block';
+            
+            // Display the report content
+            document.getElementById('report-content').innerHTML = report.content;
+            document.getElementById('original-query').textContent = report.original_query;
+            document.getElementById('report-created').textContent = new Date(report.created_at).toLocaleString();
+            document.getElementById('report-id').textContent = report.report_id;
+        }
+
+        function downloadReport() {
+            const reportContent = document.getElementById('report-content').innerText;
+            const originalQuery = document.getElementById('original-query').textContent;
+            const reportCreated = document.getElementById('report-created').textContent;
+            const reportId = document.getElementById('report-id').textContent;
+            
+            const fullReport = `Final Synthesis Report
+
+Job ID: ${currentJobId}
+Report ID: ${reportId}
+Original Query: ${originalQuery}
+Generated: ${reportCreated}
+
+${reportContent}`;
+            
+            const blob = new Blob([fullReport], { type: 'text/plain' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `synthesis-report-${currentJobId}.txt`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+        }
+
+        function shareReport() {
+            const url = `${window.location.origin}/report?job_id=${currentJobId}`;
+            if (navigator.share) {
+                navigator.share({
+                    title: 'Synthesis Report',
+                    text: `Synthesis report for job ${currentJobId}`,
+                    url: url
+                });
+            } else {
+                // Fallback: copy to clipboard
+                navigator.clipboard.writeText(url).then(() => {
+                    alert('Report URL copied to clipboard!');
+                });
+            }
+        }
+
+        function showLoading() {
+            document.getElementById('loading').style.display = 'block';
+        }
+
+        function hideLoading() {
+            document.getElementById('loading').style.display = 'none';
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('error');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+        }
+
+        function hideError() {
+            document.getElementById('error').style.display = 'none';
+        }
+
+        function hideReport() {
+            document.getElementById('reportPanel').style.display = 'none';
+        }
+
+        // Check for job_id in URL parameters on page load
+        function checkUrlParams() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const jobId = urlParams.get('job_id');
+            if (jobId) {
+                document.getElementById('jobIdInput').value = jobId;
+                loadReport();
+            }
+        }
+
+        // Call this on page load
+        document.addEventListener('DOMContentLoaded', checkUrlParams);
+    </script>
+</body>
+</html> 

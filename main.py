@@ -39,7 +39,7 @@ class ResearchQuery(BaseModel):
 class JobResponse(BaseModel):
     job_id: str
 
-class JobStatus(BaseModel):
+class JobStatusResponse(BaseModel):
     status: str
     original_query: str | None = None
     thesis_dossier_id: str | None = None
@@ -155,7 +155,12 @@ async def read_research_results(job_id: str):
     """Serve the research results page"""
     return FileResponse("static/research.html")
 
-@app.get("/v2/research/{job_id}/status", response_model=JobStatus)
+@app.get("/report")
+async def read_report_viewer():
+    """Serve the synthesis report viewer page"""
+    return FileResponse("static/report.html")
+
+@app.get("/v2/research/{job_id}/status", response_model=JobStatusResponse)
 async def get_job_status(job_id: str, db: Session = Depends(get_db)):
     """Get the status of a research job from database and Celery task"""
     
@@ -188,7 +193,7 @@ async def get_job_status(job_id: str, db: Session = Depends(get_db)):
         except:
             task_status = "UNKNOWN"
     
-    return JobStatus(
+    return JobStatusResponse(
         status=job.status.value,
         original_query=job.query,
         thesis_dossier_id=thesis_dossier_id,

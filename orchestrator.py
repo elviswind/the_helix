@@ -120,7 +120,7 @@ def trigger_synthesis_if_ready(job_id: str, background_tasks=None):
             antithesis_dossier.status == DossierStatus.APPROVED):
             
             # Update job status
-            job.status = JobStatus.SYNTHESIZING
+            job.status = JobStatus.COMPLETE
             db.commit()
             
             # Trigger synthesis
