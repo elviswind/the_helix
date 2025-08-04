@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Synthesis Report Viewer - AR System v3.0</title>
+    <!-- Add Marked.js for markdown parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -181,6 +183,127 @@
             padding-left: 20px;
         }
 
+        /* Markdown content styling */
+        .report-content h1,
+        .report-content h2,
+        .report-content h3,
+        .report-content h4,
+        .report-content h5,
+        .report-content h6 {
+            color: #333;
+            margin: 25px 0 15px 0;
+            font-weight: 600;
+        }
+
+        .report-content h1 {
+            font-size: 2rem;
+            border-bottom: 2px solid #e9ecef;
+            padding-bottom: 10px;
+        }
+
+        .report-content h2 {
+            font-size: 1.5rem;
+            border-bottom: 1px solid #e9ecef;
+            padding-bottom: 8px;
+        }
+
+        .report-content h3 {
+            font-size: 1.25rem;
+        }
+
+        .report-content h4 {
+            font-size: 1.1rem;
+        }
+
+        .report-content p {
+            margin-bottom: 15px;
+            line-height: 1.6;
+        }
+
+        .report-content blockquote {
+            border-left: 4px solid #667eea;
+            margin: 20px 0;
+            padding: 10px 20px;
+            background: #f8f9fa;
+            font-style: italic;
+        }
+
+        .report-content code {
+            background: #f1f3f4;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+        }
+
+        .report-content pre {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+            padding: 15px;
+            overflow-x: auto;
+            margin: 15px 0;
+        }
+
+        .report-content pre code {
+            background: none;
+            padding: 0;
+        }
+
+        .report-content table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 20px 0;
+        }
+
+        .report-content th,
+        .report-content td {
+            border: 1px solid #e9ecef;
+            padding: 8px 12px;
+            text-align: left;
+        }
+
+        .report-content th {
+            background: #f8f9fa;
+            font-weight: 600;
+        }
+
+        .report-content strong {
+            font-weight: 600;
+        }
+
+        .report-content em {
+            font-style: italic;
+        }
+
+        .report-content a {
+            color: #667eea;
+            text-decoration: none;
+        }
+
+        .report-content a:hover {
+            text-decoration: underline;
+        }
+
+        .report-content hr {
+            border: none;
+            border-top: 1px solid #e9ecef;
+            margin: 30px 0;
+        }
+
+        /* Raw markdown view styling */
+        .raw-markdown {
+            white-space: pre-wrap;
+            font-family: 'Courier New', monospace;
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 6px;
+            overflow-x: auto;
+            border: 1px solid #e9ecef;
+            line-height: 1.4;
+            font-size: 0.9rem;
+        }
+
         .report-actions {
             margin-top: 30px;
             padding-top: 20px;
@@ -324,6 +447,7 @@
             </div>
 
             <div class="report-actions">
+                <button class="action-btn" id="toggleViewBtn" onclick="toggleView()">📝 Show Raw Markdown</button>
                 <button class="action-btn primary" onclick="window.print()">🖨️ Print Report</button>
                 <button class="action-btn" onclick="downloadReport()">📥 Download Report</button>
                 <button class="action-btn" onclick="shareReport()">📤 Share Report</button>
@@ -333,6 +457,18 @@
 
     <script>
         let currentJobId = null;
+        let currentMarkdownContent = null;
+        let isMarkdownView = true; // true = rendered markdown, false = raw markdown
+
+        // Configure marked.js for security
+        if (typeof marked !== 'undefined') {
+            marked.setOptions({
+                breaks: true,
+                gfm: true,
+                sanitize: false, // We trust our content source
+                smartLists: true
+            });
+        }
 
         // Load recent jobs on page load
         document.addEventListener('DOMContentLoaded', function() {
@@ -437,18 +573,66 @@
             // Show the report panel
             document.getElementById('reportPanel').style.display = 'block';
             
-            // Display the report content
-            document.getElementById('report-content').innerHTML = report.content;
+            // Store the markdown content for toggling
+            currentMarkdownContent = report.content || '';
+            isMarkdownView = true;
+            
+            // Show loading indicator while parsing
+            document.getElementById('report-content').innerHTML = '<div style="text-align: center; padding: 20px; color: #6c757d;">Parsing markdown...</div>';
+            
+            // Parse markdown content and display it
+            setTimeout(() => {
+                let htmlContent;
+                if (typeof marked !== 'undefined') {
+                    htmlContent = marked.parse(currentMarkdownContent);
+                } else {
+                    // Fallback to plain text if marked.js is not available
+                    htmlContent = `<pre class="raw-markdown">${currentMarkdownContent}</pre>`;
+                }
+                document.getElementById('report-content').innerHTML = htmlContent;
+            }, 100);
+            
+            // Update toggle button text
+            document.getElementById('toggleViewBtn').textContent = '📝 Show Raw Markdown';
+            
             document.getElementById('original-query').textContent = report.original_query;
             document.getElementById('report-created').textContent = new Date(report.created_at).toLocaleString();
             document.getElementById('report-id').textContent = report.report_id;
         }
 
+        function toggleView() {
+            if (!currentMarkdownContent) return;
+            
+            const contentDiv = document.getElementById('report-content');
+            const toggleBtn = document.getElementById('toggleViewBtn');
+            
+            if (isMarkdownView) {
+                // Switch to raw markdown
+                contentDiv.innerHTML = `<pre class="raw-markdown">${currentMarkdownContent}</pre>`;
+                toggleBtn.textContent = '👁️ Show Preview';
+                isMarkdownView = false;
+            } else {
+                // Switch to rendered markdown
+                let htmlContent;
+                if (typeof marked !== 'undefined') {
+                    htmlContent = marked.parse(currentMarkdownContent);
+                } else {
+                    // Fallback to plain text if marked.js is not available
+                    htmlContent = `<pre class="raw-markdown">${currentMarkdownContent}</pre>`;
+                }
+                contentDiv.innerHTML = htmlContent;
+                toggleBtn.textContent = '📝 Show Raw Markdown';
+                isMarkdownView = true;
+            }
+        }
+
         function downloadReport() {
-            const reportContent = document.getElementById('report-content').innerText;
             const originalQuery = document.getElementById('original-query').textContent;
             const reportCreated = document.getElementById('report-created').textContent;
             const reportId = document.getElementById('report-id').textContent;
+            
+            // Use the original markdown content for download
+            const reportContent = currentMarkdownContent || document.getElementById('report-content').innerText;
             
             const fullReport = `Final Synthesis Report
 
@@ -459,11 +643,11 @@ Generated: ${reportCreated}
 
 ${reportContent}`;
             
-            const blob = new Blob([fullReport], { type: 'text/plain' });
+            const blob = new Blob([fullReport], { type: 'text/markdown' });
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `synthesis-report-${currentJobId}.txt`;
+            a.download = `synthesis-report-${currentJobId}.md`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
