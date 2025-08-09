@@ -9,12 +9,14 @@ Thesis and Antithesis dossiers into a single coherent narrative.
 import json
 import uuid
 import requests
+import logging
 from datetime import datetime
 from typing import Dict, Any, List
 from sqlalchemy.orm import Session
 
 from models import SessionLocal, Job, EvidenceDossier, SynthesisReport, LLMRequest, LLMRequestStatus, LLMRequestType
 from celery_app import celery_app
+from logging_config import get_file_logger
 
 class SynthesisAgent:
     """Agent responsible for generating the final balanced report"""
@@ -22,6 +24,7 @@ class SynthesisAgent:
     def __init__(self):
         self.llm_url = "http://192.168.1.15:11434/api/generate"
         self.model = "gemma3:27b"
+        self.logger = get_file_logger("agent.synthesis", "logs/agent.log")
     
     def generate_synthesis_prompt(self, thesis_dossier: EvidenceDossier, antithesis_dossier: EvidenceDossier) -> str:
         """Generate the prompt for the synthesis LLM call"""
@@ -108,6 +111,7 @@ Your response should be comprehensive but concise, typically 800-1200 words."""
             return result.get("response", "")
             
         except Exception as e:
+            self.logger.error("LLM call failed: %s", e)
             raise Exception(f"LLM call failed: {str(e)}")
     
     def synthesize_dossiers(self, job_id: str) -> str:
@@ -178,6 +182,7 @@ Your response should be comprehensive but concise, typically 800-1200 words."""
                 llm_request.completed_at = datetime.utcnow()
                 db.commit()
             
+            self.logger.error("Synthesis failed for job %s: %s", job_id, e)
             raise e
         finally:
             db.close()
@@ -190,7 +195,8 @@ def synthesis_agent_task(self, job_id: str):
     """Celery task for the synthesis agent"""
     
     try:
-        print(f"🎯 Starting synthesis for job {job_id}")
+        logger = get_file_logger("agent.synthesis", "logs/agent.log")
+        logger.info("Starting synthesis for job %s", job_id)
         
         # Update task state
         self.update_state(
@@ -201,7 +207,7 @@ def synthesis_agent_task(self, job_id: str):
         # Generate the synthesis report
         synthesis_content = synthesis_agent.synthesize_dossiers(job_id)
         
-        print(f"✅ Synthesis completed for job {job_id}")
+        logger.info("Synthesis completed for job %s", job_id)
         
         # Update task state
         self.update_state(
@@ -220,7 +226,8 @@ def synthesis_agent_task(self, job_id: str):
         }
         
     except Exception as e:
-        print(f"❌ Synthesis failed for job {job_id}: {str(e)}")
+        logger = get_file_logger("agent.synthesis", "logs/agent.log")
+        logger.error("Synthesis failed for job %s: %s", job_id, e)
         
         # Update task state
         self.update_state(
@@ -239,6 +246,8 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         job_id = sys.argv[1]
         result = synthesis_agent_task.delay(job_id)
-        print(f"Synthesis task queued: {result.id}")
+        logger = get_file_logger("agent.synthesis", "logs/agent.log")
+        logger.info("Synthesis task queued: %s", result.id)
     else:
-        print("Usage: python synthesis_agent.py <job_id>") 
+        logger = get_file_logger("agent.synthesis", "logs/agent.log")
+        logger.warning("Usage: python synthesis_agent.py <job_id>")

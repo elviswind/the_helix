@@ -1,6 +1,7 @@
 import uuid
 import json
 import requests
+from logging_config import get_file_logger
 from sqlalchemy.orm import Session
 from models import (
     Job, EvidenceDossier, ResearchPlan, ResearchPlanStep,
@@ -18,6 +19,7 @@ class TrackingLLMClient:
     def __init__(self, base_url="http://192.168.1.15:11434", model="gemma3:27b"):
         self.base_url = base_url
         self.model = model
+        self.logger = get_file_logger("llm.tracking_client", "logs/llm_client.log")
     
     def generate(self, prompt: str, job_id: str, request_type: LLMRequestType, 
                  dossier_id: str = None, max_tokens: int = 2000) -> str:
@@ -71,8 +73,7 @@ class TrackingLLMClient:
                 llm_request.error_message = str(e)
                 llm_request.completed_at = datetime.utcnow()
                 db.commit()
-                
-                print(f"LLM API error: {e}")
+                self.logger.error("LLM API error: %s", e)
                 raise e
                 
         finally:
@@ -86,6 +87,7 @@ class LLMClient:
     def __init__(self, base_url="http://192.168.1.15:11434", model="gemma3:27b"):
         self.base_url = base_url
         self.model = model
+        self.logger = get_file_logger("llm.legacy_client", "logs/llm_client.log")
     
     def generate(self, prompt: str, max_tokens: int = 2000) -> str:
         """Generate text using the LLM"""
@@ -107,7 +109,7 @@ class LLMClient:
             response.raise_for_status()
             return response.json()["response"]
         except Exception as e:
-            print(f"LLM API error: {e}")
+            self.logger.error("LLM API error: %s", e)
             raise e
     
 
@@ -178,7 +180,8 @@ Ensure both missions are equally rigorous and the plans are detailed enough for 
                 pass
             
             # If all parsing fails, return a default structure
-            print(f"Failed to parse LLM response: {response}")
+            logger = get_file_logger("agent.orchestrator", "logs/agent.log")
+            logger.warning("Failed to parse LLM response: %s", response)
             return self._default_missions(user_query)
     
     def _default_missions(self, user_query: str) -> dict:

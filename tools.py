@@ -329,41 +329,26 @@ class MCPTool:
         - query: str (for search queries)
         - tool_name: str, parameters: dict (for specific tool calls)
         """
-        mcp_server_url = "http://localhost:8001"
-        
+        # IMPORTANT: Avoid making HTTP calls back into this same server process.
+        # Doing so from within a request handler can deadlock the single uvicorn worker.
+        # Instead, route requests to the appropriate local tool implementation directly.
         try:
-            # Handle search query case
+            # Handle search query case by invoking the local search tool
             if query:
-                # For search queries, we'll use the tools/execute endpoint with a search tool
-                response = requests.post(
-                    f"{mcp_server_url}/tools/execute",
-                    json={
-                        "tool_name": "mcp_search_tool",
-                        "parameters": {"query": query}
-                    },
-                    timeout=30
-                )
-                response.raise_for_status()
-                return response.json()
-            
-            # Handle specific tool calls
+                return MCPSearchTool().run(query=query)
+
+            # Handle specific tool calls by dispatching locally
             elif tool_name and parameters:
-                response = requests.post(
-                    f"{mcp_server_url}/tools/execute",
-                    json={
-                        "tool_name": tool_name,
-                        "parameters": parameters
-                    },
-                    timeout=30
-                )
-                response.raise_for_status()
-                return response.json()
-            
+                # Prevent accidental recursion
+                if tool_name == self.name:
+                    return {"error": "Recursive call to mcp_server_tool is not allowed"}
+                return execute_tool(tool_name, **parameters)
+
             else:
                 return {"error": "MCPTool requires either 'query' or both 'tool_name' and 'parameters'"}
-                
-        except requests.exceptions.RequestException as e:
-            return {"error": f"MCP server request failed: {str(e)}"}
+
+        except Exception as e:
+            return {"error": f"MCPTool failed: {str(e)}"}
 
 class LLMTool:
     name = "llm_tool"

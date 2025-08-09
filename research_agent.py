@@ -1,6 +1,16 @@
 import uuid
 import json
 import requests
+import logging
+import time
+from requests.exceptions import (
+    ReadTimeout,
+    ConnectTimeout,
+    ConnectionError as RequestsConnectionError,
+    HTTPError,
+    Timeout,
+    RequestException,
+)
 from sqlalchemy.orm import Session
 from models import (
     EvidenceDossier, ResearchPlan, ResearchPlanStep, EvidenceItem,
@@ -9,12 +19,14 @@ from models import (
 )
 from celery_app import celery_app
 from datetime import datetime
+from logging_config import get_file_logger
 
 class MCPClient:
     """Client for interacting with the MCP server"""
     
     def __init__(self, base_url="http://localhost:8001"):
         self.base_url = base_url
+        self.logger = get_file_logger("mcp.client", "logs/mcp_client.log")
     
     def get_manifest(self):
         """Get the MCP server manifest"""
@@ -23,7 +35,7 @@ class MCPClient:
             response.raise_for_status()
             return response.json()
         except Exception as e:
-            print(f"MCP manifest error: {e}")
+            self.logger.error("MCP manifest error: %s", e)
             return None
     
     def search(self, query: str, tool_name: str = None, max_results: int = 10):
@@ -40,7 +52,7 @@ class MCPClient:
             response.raise_for_status()
             return response.json()
         except Exception as e:
-            print(f"MCP search error: {e}")
+            self.logger.error("MCP search error: %s", e)
             return {"results": [], "total_count": 0}
 
 class TrackingMCPClient:
@@ -48,6 +60,7 @@ class TrackingMCPClient:
     
     def __init__(self, base_url="http://localhost:8001"):
         self.base_url = base_url
+        self.logger = get_file_logger("mcp.tracking_client", "logs/mcp_client.log")
     
     def get_manifest(self, job_id: str, dossier_id: str = None, step_id: str = None):
         """Get the MCP server manifest with request tracking"""
@@ -73,7 +86,26 @@ class TrackingMCPClient:
             db.commit()
             
             try:
-                response = requests.get(f"{self.base_url}/manifest", timeout=30)
+                url = f"{self.base_url}/manifest"
+                timeout_s = 30
+                start_time = time.time()
+                self.logger.info(
+                    "HTTP GET %s timeout=%ss job_id=%s dossier_id=%s step_id=%s",
+                    url,
+                    timeout_s,
+                    job_id,
+                    dossier_id,
+                    step_id,
+                )
+                response = requests.get(url, timeout=timeout_s)
+                elapsed = time.time() - start_time
+                self.logger.info(
+                    "GET %s completed status=%s elapsed=%.2fs bytes=%d",
+                    url,
+                    getattr(response, "status_code", "unknown"),
+                    elapsed,
+                    len(getattr(response, "content", b"")),
+                )
                 response.raise_for_status()
                 result = response.json()
                 
@@ -85,13 +117,78 @@ class TrackingMCPClient:
                 
                 return result
                 
+            except ReadTimeout as e:
+                elapsed = time.time() - start_time if 'start_time' in locals() else None
+                self.logger.error(
+                    "ReadTimeout on GET %s after %.2fs: %s",
+                    url,
+                    elapsed if elapsed is not None else -1,
+                    e,
+                    exc_info=True,
+                )
+                error_str = f"ReadTimeout: {e}"
+            except ConnectTimeout as e:
+                elapsed = time.time() - start_time if 'start_time' in locals() else None
+                self.logger.error(
+                    "ConnectTimeout on GET %s after %.2fs: %s",
+                    url,
+                    elapsed if elapsed is not None else -1,
+                    e,
+                    exc_info=True,
+                )
+                error_str = f"ConnectTimeout: {e}"
+            except RequestsConnectionError as e:
+                elapsed = time.time() - start_time if 'start_time' in locals() else None
+                self.logger.error(
+                    "ConnectionError on GET %s after %.2fs: %s",
+                    url,
+                    elapsed if elapsed is not None else -1,
+                    e,
+                    exc_info=True,
+                )
+                error_str = f"ConnectionError: {e}"
+            except HTTPError as e:
+                elapsed = time.time() - start_time if 'start_time' in locals() else None
+                status = getattr(getattr(e, 'response', None), 'status_code', 'unknown')
+                body_preview = None
+                try:
+                    body_preview = (e.response.text or "")[:500] if getattr(e, 'response', None) else None
+                except Exception:
+                    body_preview = None
+                self.logger.error(
+                    "HTTPError on GET %s status=%s after %.2fs body_preview=%r",
+                    url,
+                    status,
+                    elapsed if elapsed is not None else -1,
+                    body_preview,
+                    exc_info=True,
+                )
+                error_str = f"HTTPError: {e}"
+            except RequestException as e:
+                elapsed = time.time() - start_time if 'start_time' in locals() else None
+                self.logger.error(
+                    "RequestException on GET %s after %.2fs: %s",
+                    url,
+                    elapsed if elapsed is not None else -1,
+                    e,
+                    exc_info=True,
+                )
+                error_str = f"RequestException: {e}"
             except Exception as e:
                 # Update request as failed
                 tool_request.status = ToolRequestStatus.FAILED
                 tool_request.error_message = str(e)
                 tool_request.completed_at = datetime.utcnow()
                 db.commit()
-                print(f"MCP manifest error: {e}")
+                self.logger.error("MCP manifest error: %s", e, exc_info=True)
+                return None
+            else:
+                # In case of explicit handled exceptions above, update DB with error
+                tool_request.status = ToolRequestStatus.FAILED
+                tool_request.error_message = error_str
+                tool_request.completed_at = datetime.utcnow()
+                db.commit()
+                self.logger.error("MCP manifest error: %s", error_str)
                 return None
                 
         finally:
@@ -123,56 +220,98 @@ class TrackingMCPClient:
             db.commit()
             
             try:
-                import time
                 start_time = time.time()
                 
                 # Parse the query to extract parameters based on tool type
                 if tool_name == "document_section_retriever":
                     # Query format: "symbol:AAPL year:2024 section:business_overview"
                     params = self._parse_document_query(query)
-                    print(f"[{datetime.utcnow()}] Making request to {tool_name} with params: {params}")
+                    url = f"{self.base_url}/tools/execute"
+                    timeout_s = 60
+                    self.logger.info(
+                        "HTTP POST %s tool=%s timeout=%ss job_id=%s dossier_id=%s step_id=%s params=%s",
+                        url,
+                        tool_name,
+                        timeout_s,
+                        job_id,
+                        dossier_id,
+                        step_id,
+                        params,
+                    )
                     response = requests.post(
-                        f"{self.base_url}/tools/execute",
+                        url,
                         json={
                             "tool_name": tool_name,
                             "parameters": params
                         },
-                        timeout=60
+                        timeout=timeout_s
                     )
                 elif tool_name == "xbrl_financial_fact_retriever":
                     # Query format: "symbol:AAPL year:2024 concept:Revenue"
                     params = self._parse_xbrl_query(query)
-                    print(f"[{datetime.utcnow()}] Making request to {tool_name} with params: {params}")
+                    url = f"{self.base_url}/tools/execute"
+                    timeout_s = 60
+                    self.logger.info(
+                        "HTTP POST %s tool=%s timeout=%ss job_id=%s dossier_id=%s step_id=%s params=%s",
+                        url,
+                        tool_name,
+                        timeout_s,
+                        job_id,
+                        dossier_id,
+                        step_id,
+                        params,
+                    )
                     response = requests.post(
-                        f"{self.base_url}/tools/execute",
+                        url,
                         json={
                             "tool_name": tool_name,
                             "parameters": params
                         },
-                        timeout=60
+                        timeout=timeout_s
                     )
                 elif tool_name in ["llm_tool", "sec_data_tool", "mcp_server_tool", "mcp_search_tool"]:
                     # For these tools, pass the query directly
-                    print(f"[{datetime.utcnow()}] Making request to {tool_name} with query: {query[:100]}...")
+                    url = f"{self.base_url}/tools/execute"
+                    timeout_s = 120  # Increased timeout to 2 minutes
+                    self.logger.info(
+                        "HTTP POST %s tool=%s timeout=%ss job_id=%s dossier_id=%s step_id=%s query_preview=%r",
+                        url,
+                        tool_name,
+                        timeout_s,
+                        job_id,
+                        dossier_id,
+                        step_id,
+                        query[:200],
+                    )
                     response = requests.post(
-                        f"{self.base_url}/tools/execute",
+                        url,
                         json={
                             "tool_name": tool_name,
                             "parameters": {"query": query}
                         },
-                        timeout=120  # Increased timeout to 2 minutes
+                        timeout=timeout_s
                     )
                 else:
                     raise ValueError(f"Unknown tool: {tool_name}")
                 
                 request_time = time.time() - start_time
-                print(f"[{datetime.utcnow()}] Request to {tool_name} completed in {request_time:.2f}s")
+                self.logger.info(
+                    "Request to %s completed status=%s in %.2fs bytes=%d",
+                    tool_name,
+                    getattr(response, "status_code", "unknown"),
+                    request_time,
+                    len(getattr(response, "content", b"")),
+                )
                 
                 if request_time > 30:
-                    print(f"[{datetime.utcnow()}] WARNING: Request to {tool_name} took {request_time:.2f}s (>30s threshold)")
-                    print(f"[{datetime.utcnow()}] Query: {query[:200]}...")
-                    print(f"[{datetime.utcnow()}] Response status: {response.status_code}")
-                    print(f"[{datetime.utcnow()}] Response size: {len(response.content)} bytes")
+                    self.logger.warning(
+                        "Request to %s took %.2fs (>30s threshold). Query: %s... Status: %s, Resp size: %d bytes",
+                        tool_name,
+                        request_time,
+                        query[:200],
+                        response.status_code,
+                        len(response.content),
+                    )
                 
                 response.raise_for_status()
                 result = response.json()
@@ -185,13 +324,75 @@ class TrackingMCPClient:
                 
                 return result
                 
+            except ReadTimeout as e:
+                elapsed = time.time() - start_time if 'start_time' in locals() else None
+                self.logger.error(
+                    "ReadTimeout on POST %s tool=%s after %.2fs: %s",
+                    url,
+                    tool_name,
+                    elapsed if elapsed is not None else -1,
+                    e,
+                    exc_info=True,
+                )
+                error_detail = f"ReadTimeout: {e}"
+            except ConnectTimeout as e:
+                elapsed = time.time() - start_time if 'start_time' in locals() else None
+                self.logger.error(
+                    "ConnectTimeout on POST %s tool=%s after %.2fs: %s",
+                    url,
+                    tool_name,
+                    elapsed if elapsed is not None else -1,
+                    e,
+                    exc_info=True,
+                )
+                error_detail = f"ConnectTimeout: {e}"
+            except RequestsConnectionError as e:
+                elapsed = time.time() - start_time if 'start_time' in locals() else None
+                self.logger.error(
+                    "ConnectionError on POST %s tool=%s after %.2fs: %s",
+                    url,
+                    tool_name,
+                    elapsed if elapsed is not None else -1,
+                    e,
+                    exc_info=True,
+                )
+                error_detail = f"ConnectionError: {e}"
+            except HTTPError as e:
+                elapsed = time.time() - start_time if 'start_time' in locals() else None
+                status = getattr(getattr(e, 'response', None), 'status_code', 'unknown')
+                body_preview = None
+                try:
+                    body_preview = (e.response.text or "")[:500] if getattr(e, 'response', None) else None
+                except Exception:
+                    body_preview = None
+                self.logger.error(
+                    "HTTPError on POST %s tool=%s status=%s after %.2fs body_preview=%r",
+                    url,
+                    tool_name,
+                    status,
+                    elapsed if elapsed is not None else -1,
+                    body_preview,
+                    exc_info=True,
+                )
+                error_detail = f"HTTPError: {e}"
+            except RequestException as e:
+                elapsed = time.time() - start_time if 'start_time' in locals() else None
+                self.logger.error(
+                    "RequestException on POST %s tool=%s after %.2fs: %s",
+                    url,
+                    tool_name,
+                    elapsed if elapsed is not None else -1,
+                    e,
+                    exc_info=True,
+                )
+                error_detail = f"RequestException: {e}"
             except Exception as e:
                 # Update request as failed
                 tool_request.status = ToolRequestStatus.FAILED
                 tool_request.error_message = str(e)
                 tool_request.completed_at = datetime.utcnow()
                 db.commit()
-                print(f"MCP search error: {e}")
+                self.logger.error("MCP search error: %s", e, exc_info=True)
                 
                 # Return a fallback response for mcp_search_tool to prevent empty evidence
                 if tool_name == "mcp_search_tool":
@@ -236,6 +437,53 @@ class TrackingMCPClient:
                         }
                     else:
                         return {"results": [], "total_count": 0}
+            else:
+                # For handled requests.exceptions above, update DB and fall back similarly
+                tool_request.status = ToolRequestStatus.FAILED
+                tool_request.error_message = error_detail
+                tool_request.completed_at = datetime.utcnow()
+                db.commit()
+                self.logger.error("MCP search error: %s", error_detail)
+                if tool_name == "mcp_search_tool":
+                    return {
+                        "success": True,
+                        "result": {
+                            "success": True,
+                            "results": [
+                                {
+                                    "title": f"Search Results for: {query}",
+                                    "content": f"Search query: {query}. MCP server was unavailable, but the research step was completed.",
+                                    "source": "MCP Server (Fallback)",
+                                    "confidence": 0.3,
+                                    "tags": ["fallback", "mcp-unavailable"]
+                                }
+                            ],
+                            "total_count": 1,
+                            "query": query
+                        },
+                        "error": error_detail
+                    }
+                elif tool_name == "mcp_server_tool":
+                    return {
+                        "success": True,
+                        "result": {
+                            "success": True,
+                            "results": [
+                                {
+                                    "title": f"Server Query Results for: {query}",
+                                    "content": f"Query: {query}. MCP server was unavailable, but the research step was completed.",
+                                    "source": "MCP Server (Fallback)",
+                                    "confidence": 0.3,
+                                    "tags": ["fallback", "mcp-unavailable"]
+                                }
+                            ],
+                            "total_count": 1,
+                            "query": query
+                        },
+                        "error": error_detail
+                    }
+                else:
+                    return {"results": [], "total_count": 0}
                 
         finally:
             db.close()
@@ -308,6 +556,7 @@ class TrackingLLMClient:
     def __init__(self, base_url="http://192.168.1.15:11434", model="gemma3:27b"):
         self.base_url = base_url
         self.model = model
+        self.logger = get_file_logger("llm.tracking_client", "logs/llm_client.log")
     
     def generate(self, prompt: str, job_id: str, request_type: LLMRequestType, 
                  dossier_id: str = None, max_tokens: int = 2000) -> str:
@@ -361,8 +610,7 @@ class TrackingLLMClient:
                 llm_request.error_message = str(e)
                 llm_request.completed_at = datetime.utcnow()
                 db.commit()
-                
-                print(f"LLM API error: {e}")
+                self.logger.error("LLM API error: %s", e)
                 raise e
                 
         finally:
@@ -376,6 +624,7 @@ class LLMClient:
     def __init__(self, base_url="http://192.168.1.15:11434", model="gemma3:27b"):
         self.base_url = base_url
         self.model = model
+        self.logger = get_file_logger("llm.legacy_client", "logs/llm_client.log")
     
     def generate(self, prompt: str, max_tokens: int = 2000) -> str:
         """Generate text using the LLM"""
@@ -394,7 +643,7 @@ class LLMClient:
             response.raise_for_status()
             return response.json()["response"]
         except Exception as e:
-            print(f"LLM API error: {e}")
+            self.logger.error("LLM API error: %s", e)
             raise e
     
 
@@ -405,13 +654,14 @@ class ResearchAgent:
     def __init__(self):
         self.llm_client = TrackingLLMClient()
         self.mcp_client = TrackingMCPClient()
+        self.logger = get_file_logger("agent.research", "logs/agent.log")
     
     def check_for_direct_data(self, step_description: str, available_tools: list) -> bool:
         """Check if direct data is available for the research step"""
         
         import time
         start_time = time.time()
-        print(f"[{datetime.utcnow()}] Checking for direct data availability...")
+        self.logger.info("Checking for direct data availability...")
         
         # Create a prompt to assess if direct data is available
         tools_text = "\n".join([f"- {tool['name']}: {tool['description']}" for tool in available_tools])
@@ -440,10 +690,10 @@ Assessment:"""
         )
         
         check_time = time.time() - start_time
-        print(f"[{datetime.utcnow()}] Direct data check completed in {check_time:.2f}s")
+        self.logger.info("Direct data check completed in %.2fs", check_time)
         
         if check_time > 15:
-            print(f"[{datetime.utcnow()}] WARNING: Direct data check took {check_time:.2f}s (>15s threshold)")
+            self.logger.warning("Direct data check took %.2fs (>15s threshold)", check_time)
         
         # Extract response and determine if direct data is available
         assessment = response.strip().upper()
@@ -454,7 +704,7 @@ Assessment:"""
         
         import time
         start_time = time.time()
-        print(f"[{datetime.utcnow()}] Identifying data gap...")
+        self.logger.info("Identifying data gap...")
         
         tools_text = "\n".join([f"- {tool['name']}: {tool['description']}" for tool in available_tools])
         
@@ -480,10 +730,10 @@ Data gap:"""
         )
         
         gap_time = time.time() - start_time
-        print(f"[{datetime.utcnow()}] Data gap identification completed in {gap_time:.2f}s")
+        self.logger.info("Data gap identification completed in %.2fs", gap_time)
         
         if gap_time > 15:
-            print(f"[{datetime.utcnow()}] WARNING: Data gap identification took {gap_time:.2f}s (>15s threshold)")
+            self.logger.warning("Data gap identification took %.2fs (>15s threshold)", gap_time)
         
         return response.strip()
     
@@ -492,7 +742,7 @@ Data gap:"""
         
         import time
         start_time = time.time()
-        print(f"[{datetime.utcnow()}] Formulating proxy hypothesis...")
+        self.logger.info("Formulating proxy hypothesis...")
         
         prompt = f"""You are a research agent formulating a proxy hypothesis to bridge a data gap.
 
@@ -526,10 +776,10 @@ Proxy hypothesis:"""
         )
         
         proxy_time = time.time() - start_time
-        print(f"[{datetime.utcnow()}] Proxy hypothesis formulation completed in {proxy_time:.2f}s")
+        self.logger.info("Proxy hypothesis formulation completed in %.2fs", proxy_time)
         
         if proxy_time > 15:
-            print(f"[{datetime.utcnow()}] WARNING: Proxy hypothesis formulation took {proxy_time:.2f}s (>15s threshold)")
+            self.logger.warning("Proxy hypothesis formulation took %.2fs (>15s threshold)", proxy_time)
         
         try:
             # Try to parse the JSON response
@@ -548,7 +798,7 @@ Proxy hypothesis:"""
         
         import time
         start_time = time.time()
-        print(f"[{datetime.utcnow()}] Selecting tool for step...")
+        self.logger.info("Selecting tool for step...")
         
         # Create a prompt for tool selection
         tools_text = "\n".join([f"- {tool['name']}: {tool['description']}" for tool in available_tools])
@@ -574,10 +824,10 @@ Selected tool:"""
             )
             
             tool_selection_time = time.time() - start_time
-            print(f"[{datetime.utcnow()}] Tool selection completed in {tool_selection_time:.2f}s")
+            self.logger.info("Tool selection completed in %.2fs", tool_selection_time)
             
             if tool_selection_time > 15:
-                print(f"[{datetime.utcnow()}] WARNING: Tool selection took {tool_selection_time:.2f}s (>15s threshold)")
+                self.logger.warning("Tool selection took %.2fs (>15s threshold)", tool_selection_time)
             
             # Extract tool name from response
             tool_name = response.strip().split('\n')[0].strip()
@@ -587,12 +837,12 @@ Selected tool:"""
             if tool_name not in available_tool_names:
                 # Use intelligent fallback based on step content
                 tool_name = self._intelligent_tool_fallback(step_description, available_tool_names)
-                print(f"Warning: LLM selected invalid tool '{response.strip()}', falling back to '{tool_name}'")
+                self.logger.warning("LLM selected invalid tool '%s', falling back to '%s'", response.strip(), tool_name)
             
             return tool_name
             
         except Exception as e:
-            print(f"Error in tool selection for step '{step_description}': {e}")
+            self.logger.error("Error in tool selection for step '%s': %s", step_description, e)
             # Use intelligent fallback
             available_tool_names = [tool['name'] for tool in available_tools]
             return self._intelligent_tool_fallback(step_description, available_tool_names)
@@ -644,7 +894,7 @@ Selected tool:"""
         
         import time
         start_time = time.time()
-        print(f"[{datetime.utcnow()}] Formulating query for {tool_name}...")
+        self.logger.info("Formulating query for %s...", tool_name)
         
         if tool_name == "document_section_retriever":
             prompt = f"""You are a research agent that needs to formulate a query for the document section retriever tool.
@@ -695,10 +945,10 @@ Query:"""
         )
         
         query_time = time.time() - start_time
-        print(f"[{datetime.utcnow()}] Query formulation completed in {query_time:.2f}s")
+        self.logger.info("Query formulation completed in %.2fs", query_time)
         
         if query_time > 15:
-            print(f"[{datetime.utcnow()}] WARNING: Query formulation took {query_time:.2f}s (>15s threshold)")
+            self.logger.warning("Query formulation took %.2fs (>15s threshold)", query_time)
         
         # Extract query from response
         query = response.strip().split('\n')[0].strip()
@@ -709,7 +959,7 @@ Query:"""
         
         import time
         step_start_time = time.time()
-        print(f"[{datetime.utcnow()}] Starting step execution: {step.description[:100]}...")
+        self.logger.info("Starting step execution: %s...", step.description[:100])
         
         # Get the job ID for tracking
         job_id = dossier.job_id
@@ -874,13 +1124,14 @@ Query:"""
         db.commit()
         
         step_total_time = time.time() - step_start_time
-        print(f"[{datetime.utcnow()}] Step completed in {step_total_time:.2f}s: {step.description[:100]}...")
+        self.logger.info("Step completed in %.2fs: %s...", step_total_time, step.description[:100])
         
         if step_total_time > 60:
-            print(f"[{datetime.utcnow()}] WARNING: Step took {step_total_time:.2f}s (>60s threshold)")
-            print(f"[{datetime.utcnow()}] Step details: {step.description}")
-            print(f"[{datetime.utcnow()}] Tool used: {step.tool_used}")
-            print(f"[{datetime.utcnow()}] Evidence items created: {len(db.query(EvidenceItem).filter(EvidenceItem.dossier_id == dossier.id).all())}")
+            self.logger.warning("Step took %.2fs (>60s threshold). Step: %s, Tool: %s, Evidence count: %d",
+                                step_total_time,
+                                step.description,
+                                step.tool_used,
+                                len(db.query(EvidenceItem).filter(EvidenceItem.dossier_id == dossier.id).all()))
         
         return search_results
     
@@ -918,7 +1169,7 @@ Query:"""
         
         import time
         plan_start_time = time.time()
-        print(f"[{datetime.utcnow()}] Starting research plan execution for dossier {dossier_id}")
+        self.logger.info("Starting research plan execution for dossier %s", dossier_id)
         
         # Get the dossier
         dossier = db.query(EvidenceDossier).filter(EvidenceDossier.id == dossier_id).first()
@@ -970,12 +1221,13 @@ Query:"""
         db.commit()
         
         plan_total_time = time.time() - plan_start_time
-        print(f"[{datetime.utcnow()}] Research plan completed in {plan_total_time:.2f}s for dossier {dossier_id}")
-        print(f"[{datetime.utcnow()}] Evidence items created: {len(evidence_items)}")
+        self.logger.info("Research plan completed in %.2fs for dossier %s", plan_total_time, dossier_id)
+        self.logger.info("Evidence items created: %d", len(evidence_items))
         
         if plan_total_time > 300:  # 5 minutes
-            print(f"[{datetime.utcnow()}] WARNING: Research plan took {plan_total_time:.2f}s (>5min threshold)")
-            print(f"[{datetime.utcnow()}] Dossier mission: {dossier.mission[:200]}...")
+            self.logger.warning("Research plan took %.2fs (>5min threshold). Mission: %s...",
+                                plan_total_time,
+                                dossier.mission[:200])
 
 @celery_app.task(bind=True)
 def research_agent_task(self, dossier_id: str):
@@ -1005,7 +1257,13 @@ def research_agent_task(self, dossier_id: str):
                 # Check if all dossiers are in AWAITING_VERIFICATION status
                 all_complete = all(d.status == DossierStatus.AWAITING_VERIFICATION for d in all_dossiers)
                 
-                print(f"Research agent task for dossier {dossier_id}: all_complete={all_complete}, dossier_count={len(all_dossiers)}")
+                # Use the research agent's logger instead of Celery task instance
+                agent.logger.info(
+                    "Research agent task for dossier %s: all_complete=%s, dossier_count=%d",
+                    dossier_id,
+                    all_complete,
+                    len(all_dossiers),
+                )
                 
                 if all_complete:
                     # Update job status to AWAITING_VERIFICATION
@@ -1014,15 +1272,19 @@ def research_agent_task(self, dossier_id: str):
                         try:
                             job.status = JobStatus.AWAITING_VERIFICATION
                             db.commit()
-                            print(f"Job {job_id} updated to AWAITING_VERIFICATION - all dossiers complete")
+                            agent.logger.info(
+                                "Job %s updated to AWAITING_VERIFICATION - all dossiers complete",
+                                job_id,
+                            )
                         except Exception as e:
-                            print(f"Error updating job status: {e}")
+                            self.logger.error("Error updating job status: %s", e)
                             db.rollback()
                             raise
                     else:
-                        print(f"Warning: Job {job_id} not found when trying to update status")
+                        self.logger.warning("Job %s not found when trying to update status", job_id)
                 else:
-                    print(f"Not all dossiers complete for job {job_id}. Dossier statuses: {[d.status.value for d in all_dossiers]}")
+                    self.logger.info("Not all dossiers complete for job %s. Dossier statuses: %s",
+                                     job_id, [d.status.value for d in all_dossiers])
             
             self.update_state(state='SUCCESS', meta={'status': 'Research completed'})
             
@@ -1036,6 +1298,7 @@ def research_agent_task(self, dossier_id: str):
             db.close()
             
     except Exception as e:
-        print(f"Research agent task failed for dossier {dossier_id}: {e}")
+        logger = get_file_logger("agent.research", "logs/agent.log")
+        logger.error("Research agent task failed for dossier %s: %s", dossier_id, e)
         self.update_state(state='FAILURE', meta={'error': str(e)})
         raise 
