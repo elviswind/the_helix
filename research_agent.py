@@ -1062,7 +1062,7 @@ Query:"""
                 value = result.get('value', 0)
                 unit = result.get('unit', 'USD')
                 
-                content = f"{concept}: ${value:,} ({unit}) for {year}"
+                content = f"{concept}: ${value} ({unit}) for {year}"
                 
                 evidence_item = EvidenceItem(
                     id=f"ev-{uuid.uuid4().hex[:8]}",
