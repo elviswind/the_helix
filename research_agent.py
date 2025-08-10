@@ -269,7 +269,7 @@ class TrackingMCPClient:
                         },
                         timeout=timeout_s
                     )
-                elif tool_name in ["llm_tool", "sec_data_tool", "mcp_server_tool", "mcp_search_tool"]:
+                elif tool_name in ["sec_data_tool", "xbrl_available_concepts_retriever"]:
                     # For these tools, pass the query directly
                     url = f"{self.base_url}/tools/execute"
                     timeout_s = 120  # Increased timeout to 2 minutes
@@ -851,8 +851,8 @@ Selected tool:"""
         """Intelligent fallback for tool selection based on step content"""
         step_lower = step_description.lower()
         
-        # Check for financial/10-K related keywords
-        financial_keywords = ['financial', 'earnings', 'revenue', 'profit', '10-k', '10k', 'quarterly', 'annual', 'sec', 'filing']
+        # Check for financial/10-K related keywords - prioritize XBRL for numerical data
+        financial_keywords = ['financial', 'earnings', 'revenue', 'profit', 'income', 'margin', 'ratio', '10-k', '10k', 'quarterly', 'annual', 'sec', 'filing', 'performance', 'growth', 'market share']
         if any(keyword in step_lower for keyword in financial_keywords):
             if 'xbrl_financial_fact_retriever' in available_tool_names:
                 return 'xbrl_financial_fact_retriever'
@@ -860,34 +860,32 @@ Selected tool:"""
                 return 'document_section_retriever'
         
         # Check for document/section related keywords
-        document_keywords = ['section', 'risk', 'management', 'business', 'overview', 'discussion', 'compensation']
+        document_keywords = ['section', 'risk', 'management', 'business', 'overview', 'discussion', 'compensation', 'strategy', 'competition', 'market', 'industry']
         if any(keyword in step_lower for keyword in document_keywords):
             if 'document_section_retriever' in available_tool_names:
                 return 'document_section_retriever'
         
-        # Check for analysis/insight keywords
-        analysis_keywords = ['analysis', 'insight', 'opinion', 'expert', 'assessment', 'evaluation']
-        if any(keyword in step_lower for keyword in analysis_keywords):
-            if 'llm_tool' in available_tool_names:
-                return 'llm_tool'
-        
         # Check for SEC/data availability keywords
-        sec_keywords = ['available', 'companies', 'filings', 'sec', 'data']
+        sec_keywords = ['available', 'companies', 'filings', 'sec', 'data', 'concepts', 'available concepts']
         if any(keyword in step_lower for keyword in sec_keywords):
             if 'sec_data_tool' in available_tool_names:
                 return 'sec_data_tool'
+            elif 'xbrl_available_concepts_retriever' in available_tool_names:
+                return 'xbrl_available_concepts_retriever'
         
-        # Default fallback - prefer document_section_retriever for business analysis
-        if 'document_section_retriever' in available_tool_names:
-            return 'document_section_retriever'
-        elif 'xbrl_financial_fact_retriever' in available_tool_names:
+        # Default fallback - prefer XBRL for financial analysis, then document sections
+        if 'xbrl_financial_fact_retriever' in available_tool_names:
             return 'xbrl_financial_fact_retriever'
-        elif 'llm_tool' in available_tool_names:
-            return 'llm_tool'
+        elif 'document_section_retriever' in available_tool_names:
+            return 'document_section_retriever'
+        elif 'xbrl_available_concepts_retriever' in available_tool_names:
+            return 'xbrl_available_concepts_retriever'
+        elif 'sec_data_tool' in available_tool_names:
+            return 'sec_data_tool'
         elif available_tool_names:
             return available_tool_names[0]
         else:
-            return 'document_section_retriever'  # Ultimate fallback
+            return 'xbrl_financial_fact_retriever'  # Ultimate fallback to financial data
     
     def formulate_query(self, step_description: str, tool_name: str, job_id: str, dossier_id: str) -> str:
         """Use LLM to formulate a query for the selected tool"""
@@ -970,9 +968,8 @@ Query:"""
             # Fallback to default tools if MCP server is unavailable
             available_tools = [
                 {"name": "xbrl_financial_fact_retriever", "description": "Retrieves a specific numerical financial fact (like Revenue, NetIncome) for a given company and year from its XBRL filing."},
+                {"name": "xbrl_available_concepts_retriever", "description": "Retrieves a list of available financial concepts from a company's XBRL filing for a given year."},
                 {"name": "document_section_retriever", "description": "Retrieves the full text of a specific section (like 'Risk Factors') from a company's 10-K HTML filing."},
-                {"name": "mcp_server_tool", "description": "Interfaces with the MCP server to retrieve financial data and reports"},
-                {"name": "llm_tool", "description": "Uses the LLM to generate analysis and insights"},
                 {"name": "sec_data_tool", "description": "Get information about available SEC filings and companies"}
             ]
         else:
@@ -1014,8 +1011,8 @@ Query:"""
         # Step 6: Create evidence items from search results
         # Handle different response formats based on tool type
         if tool_name == "document_section_retriever":
-            # Document section response is a single object
-            result = search_results
+            # Document section response is nested in search_results["result"]
+            result = search_results.get("result", {})
             tags = ["10k-report", result.get("section", "financial")]
             if step.proxy_hypothesis:
                 tags.extend(["proxy-evidence", step.proxy_hypothesis.get("observable_proxy", "proxy")])
@@ -1023,25 +1020,25 @@ Query:"""
             evidence_item = EvidenceItem(
                 id=f"ev-{uuid.uuid4().hex[:8]}",
                 dossier_id=dossier.id,
-                title=f"{result['symbol']} - {result['section']} ({result['year']})",
-                content=result["content"],
-                source=f"10-K Filing ({result['year']}) - {result.get('source', 'SEC')}",
+                title=f"{result.get('symbol', 'Unknown')} - {result.get('section', 'Unknown')} ({result.get('year', 'Unknown')})",
+                content=result.get("content", "No content available"),
+                source=f"10-K Filing ({result.get('year', 'Unknown')}) - {result.get('source', 'SEC')}",
                 confidence=0.95,  # High confidence for official filings
                 tags=tags
             )
             db.add(evidence_item)
             
         elif tool_name == "xbrl_financial_fact_retriever":
-            # XBRL financial fact response is a single object
-            result = search_results
+            # XBRL financial fact response is nested in search_results["result"]
+            result = search_results.get("result", {})
             tags = ["financial-data", "xbrl"]
             if step.proxy_hypothesis:
                 tags.extend(["proxy-evidence", step.proxy_hypothesis.get("observable_proxy", "proxy")])
             
             # Check if there's an error in the XBRL result
-            if "error" in result and result["error"]:
+            if "error" in search_results and search_results["error"]:
                 # Handle XBRL error case
-                content = f"XBRL data not available: {result['error']}"
+                content = f"XBRL data not available: {search_results['error']}"
                 # Safely get fields with defaults
                 symbol = result.get('symbol', 'Unknown')
                 concept = result.get('concept', 'Unknown')
@@ -1110,12 +1107,24 @@ Query:"""
                     source = result.get("source", "Unknown source")
                     confidence = result.get("confidence", 0.5)
                     
+                    # Improve source formatting for better clarity
+                    if "Placeholder Data" in source:
+                        # For placeholder data, make it clear this is not real data
+                        formatted_source = f"⚠️ {source} - Use real financial statements for actual analysis"
+                        confidence = min(confidence, 0.3)  # Lower confidence for placeholder data
+                    elif "10-K Filing" in source or "XBRL Filing" in source:
+                        # For real financial data, keep as is
+                        formatted_source = source
+                    else:
+                        # For other sources, add context
+                        formatted_source = f"Data Source: {source}"
+                    
                     evidence_item = EvidenceItem(
                         id=f"ev-{uuid.uuid4().hex[:8]}",
                         dossier_id=dossier.id,
                         title=title,
                         content=content,
-                        source=source,
+                        source=formatted_source,
                         confidence=confidence,
                         tags=tags
                     )
@@ -1277,13 +1286,13 @@ def research_agent_task(self, dossier_id: str):
                                 job_id,
                             )
                         except Exception as e:
-                            self.logger.error("Error updating job status: %s", e)
+                            agent.logger.error("Error updating job status: %s", e)
                             db.rollback()
                             raise
                     else:
-                        self.logger.warning("Job %s not found when trying to update status", job_id)
+                        agent.logger.warning("Job %s not found when trying to update status", job_id)
                 else:
-                    self.logger.info("Not all dossiers complete for job %s. Dossier statuses: %s",
+                    agent.logger.info("Not all dossiers complete for job %s. Dossier statuses: %s",
                                      job_id, [d.status.value for d in all_dossiers])
             
             self.update_state(state='SUCCESS', meta={'status': 'Research completed'})

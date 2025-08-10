@@ -318,110 +318,6 @@ class DocumentSectionTool:
     def run(self, symbol: str, year: int, section: str):
         return get_section_text(symbol, year, section)
 
-class MCPTool:
-    name = "mcp_server_tool"
-    description = "Interfaces with the MCP server to retrieve financial data and reports"
-
-    def run(self, query: str = None, tool_name: str = None, parameters: dict = None):
-        """
-        Run MCP tool with flexible parameter handling.
-        Can be called with either:
-        - query: str (for search queries)
-        - tool_name: str, parameters: dict (for specific tool calls)
-        """
-        # IMPORTANT: Avoid making HTTP calls back into this same server process.
-        # Doing so from within a request handler can deadlock the single uvicorn worker.
-        # Instead, route requests to the appropriate local tool implementation directly.
-        try:
-            # Handle search query case by invoking the local search tool
-            if query:
-                return MCPSearchTool().run(query=query)
-
-            # Handle specific tool calls by dispatching locally
-            elif tool_name and parameters:
-                # Prevent accidental recursion
-                if tool_name == self.name:
-                    return {"error": "Recursive call to mcp_server_tool is not allowed"}
-                return execute_tool(tool_name, **parameters)
-
-            else:
-                return {"error": "MCPTool requires either 'query' or both 'tool_name' and 'parameters'"}
-
-        except Exception as e:
-            return {"error": f"MCPTool failed: {str(e)}"}
-
-class LLMTool:
-    name = "llm_tool"
-    description = "Uses the LLM to generate analysis and insights"
-
-    def __init__(self):
-        self.llm_client = TrackingLLMClient()
-    
-    def run(self, prompt: str, job_id: str, request_type: str, dossier_id: str = None):
-        """Run LLM analysis"""
-        from models import LLMRequestType
-        
-        # Map request type string to enum
-        type_map = {
-            "orchestrator_mission": LLMRequestType.ORCHESTRATOR_MISSION,
-            "tool_selection": LLMRequestType.TOOL_SELECTION,
-            "query_formulation": LLMRequestType.QUERY_FORMULATION,
-            "synthesis": LLMRequestType.SYNTHESIS
-        }
-        
-        llm_request_type = type_map.get(request_type, LLMRequestType.ORCHESTRATOR_MISSION)
-        
-        try:
-            result = self.llm_client.generate(prompt, job_id, llm_request_type, dossier_id)
-            return {
-                "success": True,
-                "response": result,
-                "request_type": request_type
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "request_type": request_type
-            }
-
-class MCPSearchTool:
-    name = "mcp_search_tool"
-    description = "Search for financial data and reports using the MCP server"
-
-    def run(self, query: str):
-        """Search for financial data based on query"""
-        # For now, return a mock response that simulates search results
-        # In a real implementation, this would search through financial databases
-        return {
-            "success": True,
-            "results": [
-                {
-                    "title": "Apple Inc. Financial Performance Analysis",
-                    "content": "Apple's revenue growth has been consistent over the past 5 years, with strong performance in the mobile phone market.",
-                    "source": "Financial Analysis Report",
-                    "confidence": 0.85,
-                    "tags": ["financial", "revenue", "mobile"]
-                },
-                {
-                    "title": "Mobile Phone Market Share Analysis",
-                    "content": "Apple maintains a strong position in the premium smartphone segment with approximately 20% global market share.",
-                    "source": "Market Research Report",
-                    "confidence": 0.78,
-                    "tags": ["market_share", "mobile", "premium"]
-                },
-                {
-                    "title": "Competitive Analysis: Apple vs Android",
-                    "content": "While Apple leads in profitability and brand loyalty, Android manufacturers are gaining ground in emerging markets and innovation areas like foldable displays.",
-                    "source": "Competitive Intelligence",
-                    "confidence": 0.72,
-                    "tags": ["competition", "android", "innovation"]
-                }
-            ],
-            "total_count": 3,
-            "query": query
-        }
-
 class SECDataTool:
     name = "sec_data_tool"
     description = "Get information about available SEC filings and companies"
@@ -472,9 +368,6 @@ tool_registry = {
     "xbrl_financial_fact_retriever": XBRLFactTool(),
     "xbrl_available_concepts_retriever": XBRLConceptsTool(),
     "document_section_retriever": DocumentSectionTool(),
-    "mcp_server_tool": MCPTool(),
-    "mcp_search_tool": MCPSearchTool(),
-    "llm_tool": LLMTool(),
     "sec_data_tool": SECDataTool()
 }
 

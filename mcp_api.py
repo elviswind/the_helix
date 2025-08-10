@@ -18,7 +18,7 @@ from orchestrator import (
     start_dialectical_research, get_job_status, get_dossiers, 
     record_approval, trigger_synthesis_if_ready
 )
-from tools import execute_tool, get_tool_by_name, XBRLFactTool, DocumentSectionTool, MCPTool, LLMTool, SECDataTool
+from tools import execute_tool, get_tool_by_name, XBRLFactTool, XBRLConceptsTool, DocumentSectionTool, SECDataTool
 from synthesis_agent import synthesis_agent_task
 
 app = FastAPI(title="AR v3.0 MCP Server", version="3.0.0")
@@ -49,20 +49,12 @@ async def get_manifest():
                 "description": XBRLFactTool.description
             },
             {
+                "name": XBRLConceptsTool.name,
+                "description": XBRLConceptsTool.description
+            },
+            {
                 "name": DocumentSectionTool.name,
                 "description": DocumentSectionTool.description
-            },
-            {
-                "name": MCPTool.name,
-                "description": MCPTool.description
-            },
-            {
-                "name": "mcp_search_tool",
-                "description": "Search for financial data and reports using the MCP server"
-            },
-            {
-                "name": LLMTool.name,
-                "description": LLMTool.description
             },
             {
                 "name": SECDataTool.name,
